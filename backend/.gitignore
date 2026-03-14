@@ -1,0 +1,17 @@
+
+
+# Environments
+.env
+.venv
+
+# IDE
+.vscode/
+.idea/
+.jbeval/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
