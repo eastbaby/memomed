@@ -1,54 +1,18 @@
-"""LangGraph single-node graph template.
-
-Returns a predefined response. Replace logic and configuration as needed.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Any, Dict
-
-from langgraph.graph import StateGraph
-from langgraph.runtime import Runtime
-from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from app.agent.utils.state import AgentState
+from app.agent.utils.nodes import process_input, call_model, should_continue, generate_response, tool_node
 
 
-class Context(TypedDict):
-    """Context parameters for the agent.
-
-    Set these when creating assistants OR when invoking the graph.
-    See: https://langchain-ai.github.io/langgraph/cloud/how-tos/configuration_cloud/
-    """
-
-    my_configurable_param: str
-
-
-@dataclass
-class State:
-    """Input state for the agent.
-
-    Defines the initial structure of incoming data.
-    See: https://langchain-ai.github.io/langgraph/concepts/low_level/#state
-    """
-
-    changeme: str = "example"
-
-
-async def call_model(state: State, runtime: Runtime[Context]) -> Dict[str, Any]:
-    """Process input and returns output.
-
-    Can use runtime context to alter behavior.
-    """
-    return {
-        "changeme": "output from call_model. "
-        f"Configured with {(runtime.context or {}).get('my_configurable_param')}"
-    }
-
-
-# Define the graph
 graph = (
-    StateGraph(State, context_schema=Context)
-    .add_node(call_model)
-    .add_edge("__start__", "call_model")
-    .compile(name="New Graph")
+    StateGraph(AgentState)
+    .add_node("process_input", process_input)
+    .add_node("call_model", call_model)
+    .add_node("tools", tool_node)
+    .add_node("generate_response", generate_response)
+    .add_edge(START, "process_input")
+    .add_edge("process_input", "call_model")
+    .add_conditional_edges("call_model", should_continue, {"tools": "tools", "end": "generate_response"})
+    .add_edge("tools", "call_model")
+    .add_edge("generate_response", END)
+    .compile(name="memomed_agent")
 )
