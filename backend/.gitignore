@@ -8,6 +8,7 @@
 .vscode/
 .idea/
 .jbeval/
+__pycache__/
 *.swp
 *.swo
 *~
