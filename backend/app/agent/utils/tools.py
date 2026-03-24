@@ -79,4 +79,4 @@ def get_tools():
     Returns:
         工具列表
     """
-    return [search_web, get_current_time, calculate, process_medical_report_tool, search_medical_reports]
+    return [get_current_time, calculate, search_medical_reports]

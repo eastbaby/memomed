@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from app.agent.utils.state import AgentState
-from app.agent.utils.nodes import process_input, call_model, should_continue, generate_response, tool_node
+from app.agent.utils.nodes import process_input, call_model, tools_condition, generate_response, tool_node
 
 
 graph = (
@@ -11,7 +11,7 @@ graph = (
     .add_node("generate_response", generate_response)
     .add_edge(START, "process_input")
     .add_edge("process_input", "call_model")
-    .add_conditional_edges("call_model", should_continue, {"tools": "tools", "end": "generate_response"})
+    .add_conditional_edges("call_model", tools_condition, {"tools": "tools", "end": "generate_response"})
     .add_edge("tools", "call_model")
     .add_edge("generate_response", END)
     .compile(name="memomed_agent")

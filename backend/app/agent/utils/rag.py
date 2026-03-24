@@ -3,7 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_postgres import PGEngine, PGVectorStore
-from app.agent.utils.llm import get_llm
+from app.agent.utils.llm import get_openai_llm_non_stream
 from app.settings import settings
 
 # 创建PGEngine
@@ -42,7 +42,7 @@ def extract_text_from_image(image_url: str) -> str:
         提取的文字
     """
     try:
-        llm = get_llm()
+        llm = get_openai_llm_non_stream()
         # 使用大模型提取图片文字
         # 注意：这需要模型支持图片理解能力
         response = llm.invoke([{
@@ -50,7 +50,7 @@ def extract_text_from_image(image_url: str) -> str:
             "content": [
                 {
                     "type": "text",
-                    "text": "请提取图片中的所有文字，保持原始格式和内容"
+                    "text": "请提取图片中的所有文字，保持原始格式和内容。注意直接输出提取后的文字内容，不要加任何说明或解释"
                 },
                 {
                     "type": "image_url",
@@ -104,7 +104,7 @@ def process_medical_report(image_url: str):
         处理结果
     """
     # 提取文字
-    print(f"开始处理图片: {image_url}")
+    # print(f"开始处理图片: {image_url}")
     text = extract_text_from_image(image_url)
     
     # 创建文档

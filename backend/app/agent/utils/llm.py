@@ -3,7 +3,7 @@ from langchain_openai import ChatOpenAI
 from app.settings import settings
 
 
-def get_llm():
+def get_openai_llm_stream():
     """获取语言模型实例
     
     Returns:
@@ -15,6 +15,23 @@ def get_llm():
         base_url=settings.LLM_BASE_URL,
         max_tokens=1000,
         streaming=True,
+        extra_body={
+            "enable_thinking": False  # 开启思考模式（False为关闭）
+        }
+    )
+
+def get_openai_llm_non_stream():
+    """获取语言模型实例
+    
+    Returns:
+        ChatOpenAI实例
+    """
+    return ChatOpenAI(
+        model=settings.LLM_MODEL,
+        api_key=settings.LLM_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        max_tokens=1000,
+        streaming=False,
         extra_body={
             "enable_thinking": False  # 开启思考模式（False为关闭）
         }
