@@ -1,9 +1,8 @@
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import RemoveMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 from app.agent.utils.state import AgentState
 from app.agent.utils.tools import get_tools
-from app.settings import settings
+from app.agent.utils.llm import get_llm
 
 
 def process_input(state: AgentState) -> dict:
@@ -13,12 +12,11 @@ def process_input(state: AgentState) -> dict:
         state: 当前状态
         
     Returns:
-        状态更新
+        pass
     """
-    return {
-        "user_input": state.get("user_input", ""),
-        "messages": [HumanMessage(content=state.get("user_input", ""))]
-    }
+    messages = state["messages"]
+
+    # return {"messages": messages}
 
 
 def call_model(state: AgentState) -> dict:
@@ -30,20 +28,24 @@ def call_model(state: AgentState) -> dict:
     Returns:
         状态更新
     """
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY,
-        base_url=settings.LLM_BASE_URL,
-        max_tokens=1000,
-        streaming=True,
-        extra_body={
-            "enable_thinking": False  # 开启思考模式（False为关闭）
-        }
-    )
+    llm = get_llm()
     tools = get_tools()
     llm_with_tools = llm.bind_tools(tools)
+
+    # 状态更新，修改messages列表中的所有type: image的消息为type:image_url。
+    # 仅针对大模型的参数format，不改变原messages内容（为了不影响前端格式的展示）
+    messages = state["messages"]
+    messages_copy = messages.copy()
+
+    for msg in messages_copy:
+        if 'content' in msg and isinstance(msg['content'], list):
+            for item in msg['content']:
+                if isinstance(item, dict) and item.get('type') == 'image':
+                    item['type'] = 'image_url'
+                    item['image_url'] = {"url": f"data:{item['mimeType']};base64,{item['data']}"}
+                    del item['data']
     
-    response = llm_with_tools.invoke(state["messages"])
+    response = llm_with_tools.invoke(messages_copy)
     return {
         "messages": [response],
         "response": response.content

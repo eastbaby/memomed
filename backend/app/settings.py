@@ -11,8 +11,10 @@ class Settings(BaseSettings):
     LLM_API_KEY: str
     LLM_BASE_URL: str
     LLM_MODEL: str
+    EMBEDDING_MODEL: str
     LANGSMITH_API_KEY: str
     LANGSMITH_TRACING: str = "true"
+    POSTGRES_URI_CUSTOM: str
 
 
 settings = Settings()
