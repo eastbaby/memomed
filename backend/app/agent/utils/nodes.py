@@ -1,11 +1,16 @@
 import copy
-from typing import Annotated, Literal
-from langchain_core.messages import RemoveMessage, AIMessage
+import json
+from typing import Literal
+from langchain_core.messages import AIMessage
 from langgraph.prebuilt import ToolNode
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from app.agent.utils.state import AgentState
 from app.agent.utils.tools import get_tools
-from app.agent.utils.llm import get_openai_llm_non_stream, get_openai_llm_stream
+from app.agent.utils.llm import (
+    get_openai_llm_non_stream,
+    get_openai_llm_stream,
+    get_sft_llm_non_stream,
+)
 from .rag import process_medical_report
 
 
@@ -131,9 +136,11 @@ def call_model(state: AgentState) -> dict:
     """
     llm = get_openai_llm_stream()
     tools = get_tools()
+    answer_keypoints = state.get("answer_keypoints") or _extract_answer_keypoints(state)
+    answer_keypoints_text = "；".join(answer_keypoints) if answer_keypoints else "无"
     
     # 添加系统提示
-    system_prompt = """你是一个专业的健康就医管理助手，专注于帮助用户管理健康相关信息和提供医疗建议。
+    system_prompt = f"""你是一个专业的健康就医管理助手，专注于帮助用户管理健康相关信息和提供医疗建议。
     
     你的职责包括：
     1. 回答用户关于健康、医疗、就医相关的问题
@@ -145,6 +152,11 @@ def call_model(state: AgentState) -> dict:
     - 你不是医生，不能提供具体的医疗诊断和治疗方案
     - 对于严重的健康问题，请建议用户咨询专业医生
     - 保持专业、友好、耐心的态度
+    - 如果下面提供了回答关键点，最终答复必须自然覆盖这些关键点
+    - 不要输出 JSON，不要显式说“关键点如下”
+
+    回答关键点：
+    {answer_keypoints_text}
     """
 
     # 添加系统消息和图片存储状态
@@ -168,8 +180,15 @@ def call_model(state: AgentState) -> dict:
     response = llm_with_tools.invoke([system_message] + messages_copy)
     return {
         "messages": [response],
-        "response": response.content
+        "response": response.content,
+        "answer_keypoints": answer_keypoints,
     }
+
+
+class MedicalAgentTask(BaseModel):
+    """医疗助手Agent任务编排输出格式（SFT 输出结构）"""
+
+    answer_keypoints: list[str] = Field(..., description="回答关键点，给用户的回答中必须包含的内容")
 
 
 def tools_condition(state: AgentState) -> str:
@@ -189,6 +208,36 @@ def tools_condition(state: AgentState) -> str:
     return "end"
 
 
+def _extract_answer_keypoints(state: AgentState) -> list[str]:
+    """使用 SFT 模型提取最终回答必须覆盖的关键点"""
+    question = _get_latest_user_question(state)
+    if not question:
+        return []
+
+    llm = get_sft_llm_non_stream()
+    response = llm.invoke(
+        [
+            {"role": "user", "content": f"用户的问题是：{question}, 请生成回答关键要点"},
+        ]
+    )
+    raw_content = response.content if isinstance(response.content, str) else str(response.content)
+    content = raw_content.strip()
+    if content.startswith("```"):
+        content = content.strip("`").removeprefix("json").strip()
+
+    try:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start == -1 or end == 0 or start >= end:
+            return []
+
+        parsed_json = json.loads(content[start:end])
+        parsed_task = MedicalAgentTask.model_validate(parsed_json)
+        return parsed_task.answer_keypoints
+    except (json.JSONDecodeError, ValidationError):
+        return []
+
+
 def generate_response(state: AgentState) -> dict:
     """生成最终响应
     
@@ -200,16 +249,47 @@ def generate_response(state: AgentState) -> dict:
     """
     messages = state["messages"]
     last_message = messages[-1]
-    
-    if isinstance(last_message, AIMessage):
-        return {
-            "response": last_message.content,
-            "metadata": {"status": "completed"}
-        }
+
     return {
-        "response": "处理完成",
-        "metadata": {"status": "completed"}
+        "response": last_message.content if isinstance(last_message, AIMessage) else "处理完成",
+        "metadata": {"status": "completed", "answer_keypoints": state.get("answer_keypoints", [])},
     }
 
 
 tool_node = ToolNode(get_tools())
+
+
+def _get_latest_user_question(state: AgentState) -> str:
+    question_message_content = state.get("question_message_content") or []
+    extracted_question = _flatten_content_to_text(question_message_content)
+    if extracted_question:
+        return extracted_question
+
+    # for message in reversed(state["messages"]):
+    #     if isinstance(message, HumanMessage):
+    #         return _flatten_content_to_text(message.content)
+    #     if isinstance(message, dict) and message.get("role") == "user":
+    #         return _flatten_content_to_text(message.get("content"))
+    return ""
+
+
+def _flatten_content_to_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        image_count = 0
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+                continue
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and item.get("text"):
+                parts.append(str(item["text"]).strip())
+            elif item.get("type") in {"image", "image_url"}:
+                image_count += 1
+        if image_count:
+            parts.append(f"用户还上传了{image_count}张图片")
+        return "\n".join(part for part in parts if part)
+    return str(content).strip() if content else ""

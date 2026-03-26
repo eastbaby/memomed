@@ -1,0 +1,100 @@
+{"messages": [{"role": "user", "content": "用户的问题是：血压有点高，应该怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"休息，保持心情平静\", \"多喝水，避免剧烈运动\", \"定期监测血压\", \"及时就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：忘记吃药了，现在补吃可以吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"看距离下次服药时间\", \"设置闹钟提醒\", \"按时服药很重要\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：血糖不稳定，需要注意什么？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"饮食控制\", \"定时定量进餐\", \"适当运动\", \"监测血糖\", \"及时就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：不想吃药，感觉没什么效果, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"不要随意停药\", \"咨询医生\", \"坚持按时服药\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：睡眠不好，有什么建议？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"规律作息\", \"睡前避免电子产品\", \"泡脚或喝温牛奶\", \"保持卧室安静舒适\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：走了5000步，运动量够吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"继续保持\", \"每天6000-8000步\", \"循序渐进\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了两个苹果，糖分会不会太高？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"糖分在正常范围\", \"适量食用有益\", \"选择低糖水果\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉疲劳，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"睡眠不足\", \"注意营养\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：体温37.2度，正常吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"属于正常体温\", \"36.5-37.5度之间\", \"观察其他症状\", \"持续升高就就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近胃口不好，吃不下东西, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"少食多餐\", \"易消化食物\", \"开胃食物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，血压还是有点高, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"药物起效需要时间\", \"注意休息\", \"避免剧烈运动\", \"及时就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是忘记吃药，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"设置闹钟\", \"放显眼位置\", \"家人提醒\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，血糖还是高, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"饮食控制\", \"适当运动\", \"耐心等待\", \"及时就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是头晕，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"血压或血糖问题\", \"注意休息\", \"规律作息\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了两次药，会不会有问题？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"观察身体反应\", \"多喝水\", \"严重不适就就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是口渴，是不是糖尿病？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"多种原因\", \"观察其他症状\", \"检测血糖\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：运动了30分钟，够吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"很好继续保持\", \"每天30-60分钟\", \"循序渐进\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是便秘，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"高纤维食物\", \"多喝水\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了止痛药，可以喝酒吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"不建议饮酒\", \"影响药效\", \"增加副作用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉心慌，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"焦虑或睡眠不足\", \"注意休息\", \"避免劳累\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了感冒药，可以开车吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能嗜睡\", \"避免驾驶\", \"选择公共交通\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是关节疼痛，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"关节保暖\", \"适当运动\", \"热敷按摩\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了抗生素，可以喝牛奶吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"服药前后2小时避免\", \"温水送服\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉胸闷，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"心脏或肺部问题\", \"注意休息\", \"避免剧烈运动\", \"立即就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，可以吃柚子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"避免大量食用\", \"其他水果代替\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉手脚发麻，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"血液循环不畅\", \"注意保暖\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，可以吃香蕉吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含钾，适量有益\", \"不要过量\", \"咨询医生\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉腰酸背痛，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"正确坐姿站姿\", \"适当运动\", \"热敷按摩\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，可以吃西瓜吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量高，少量食用\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉眼睛干涩，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"用眼卫生\", \"人工泪液\", \"维生素A食物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了止痛药，可以喝咖啡吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"增加胃部刺激\", \"避免饮用\", \"温水替代\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉耳鸣，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"血压或耳部问题\", \"注意休息\", \"避免噪音\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了感冒药，可以喝茶吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"影响药效\", \"服药前后2小时避免\", \"温水送服\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉食欲不振，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"少食多餐\", \"开胃食物\", \"心情愉快\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，可以吃葡萄吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"适量有益\", \"可能相互作用\", \"不要过量\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉头痛，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"血压或睡眠问题\", \"注意休息\", \"避免劳累\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，可以吃苹果吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉恶心，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"消化不良或药物副作用\", \"饮食清淡\", \"少食多餐\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了抗生素，可以喝酒吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"严禁饮酒\", \"严重不良反应\", \"停药后一周避免\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉腹胀，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"饮食清淡\", \"饭后散步\", \"少食多餐\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，可以吃橙子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含维C，适量有益\", \"可能相互作用\", \"不要过量\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉乏力，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"睡眠或营养问题\", \"注意休息\", \"营养食物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，可以吃橙子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含维C，适量有益\", \"可能相互作用\", \"不要过量\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉咳嗽，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"注意保暖\", \"多喝温水\", \"蜂蜜水或梨水\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，可以吃梨吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉鼻塞，是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"感冒或鼻炎\", \"注意保暖\", \"生理盐水清洗\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：感冒药服用后能否驾驶车辆？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能引起嗜睡\", \"避免驾驶\", \"公共交通出行\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉嗓子痛，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"多喝温水\", \"避免辛辣食物\", \"蜂蜜水或盐水\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：服用降压药期间能吃西瓜吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量较高\", \"可能影响血压\", \"少量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常打嗝是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"消化不良或进食过快\", \"细嚼慢咽\", \"避免产气食物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃香蕉吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量较高\", \"少量食用\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉胃痛，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"饮食规律\", \"避免辛辣油腻\", \"温牛奶缓解\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：抗生素和牛奶能否一起服用？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"服药前后2小时避免\", \"温水送服\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉背痛是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"姿势不当或劳累\", \"正确坐姿站姿\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，可以吃苹果吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"降低胆固醇\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是肩膀痛，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"肩膀保暖\", \"适当运动\", \"热敷按摩\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：服用降压药时能吃葡萄吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"适量有益\", \"含糖量较高\", \"不要过量\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常腿抽筋是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"缺钙或疲劳\", \"补充钙质\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃橙子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是脚肿，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"注意休息\", \"抬高双脚\", \"少吃盐\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：感冒药和茶能一起喝吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"服药前后2小时避免\", \"温水送服\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常手抖是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"紧张或血糖问题\", \"注意休息\", \"保持平静\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，能吃梨吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"润肺作用\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉口干，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"多喝水\", \"避免辛辣咸食\", \"润喉糖\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃葡萄吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量较高\", \"少量食用\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉心烦是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"压力大或睡眠不足\", \"保证睡眠\", \"放松方式\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：抗生素和咖啡能一起喝吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"服药期间避免\", \"温水替代\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是尿频，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"尿路感染或前列腺问题\", \"个人卫生\", \"多喝水\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，能吃香蕉吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"富含钾\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常失眠是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"压力大或作息不规律\", \"规律作息\", \"睡前避免电子产品\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，能吃苹果吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"降低胆固醇\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉胸闷气短，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"心脏或肺部问题\", \"注意休息\", \"避免剧烈运动\", \"立即就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃西瓜吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量较高\", \"少量食用\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常记忆力下降是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"睡眠或压力大\", \"保证睡眠\", \"记忆训练\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了感冒药，能喝酒吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"严禁饮酒\", \"产生不良反应\", \"停药后避免\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是食欲下降，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"少食多餐\", \"开胃食物\", \"心情愉快\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：服用降压药期间能吃橙子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含维C有益\", \"增强免疫力\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉关节僵硬是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"关节炎或劳累\", \"关节保暖\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃梨吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是皮肤干燥，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"多喝水\", \"保湿护肤品\", \"避免长时间洗澡\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：抗生素和茶能一起喝吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"可能影响药效\", \"服药前后2小时避免\", \"温水送服\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常体重下降是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"饮食或消化问题\", \"营养均衡\", \"规律作息\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，能吃葡萄吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"含糖量较高\", \"少量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉呼吸困难，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"心脏或肺部问题\", \"注意休息\", \"空气流通\", \"立即就医\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，能吃香蕉吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含钾有益\", \"可能影响钾代谢\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常情绪低落是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"压力或睡眠问题\", \"保证睡眠\", \"倾诉交流\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃苹果吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是感觉视力模糊，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"血糖或眼部疾病\", \"用眼卫生\", \"定期检查\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：感冒药和咖啡能一起喝吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"增加心脏负担\", \"服药期间避免\", \"温水替代\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉肌肉酸痛是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"过度或缺乏运动\", \"注意休息\", \"适当运动\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降压药，能吃梨吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"润肺作用\", \"适量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：最近总是出汗多，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"气温或内分泌问题\", \"补充水分\", \"透气衣物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降糖药，能吃橙子吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量适中\", \"两餐之间吃\", \"监测血糖\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常怕冷是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"体质虚弱或甲减\", \"注意保暖\", \"温热食物\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：服用抗生素期间能喝酒吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"严禁饮酒\", \"严重不良反应\", \"停药后一周避免\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常心跳加快，怎么办？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"焦虑或心脏问题\", \"注意休息\", \"避免劳累\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：吃了降脂药，能吃西瓜吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"含糖量较高\", \"可能影响血脂\", \"少量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题：经常感觉口苦是什么原因？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"消化或肝胆问题\", \"饮食清淡\", \"蔬菜水果\", \"就医检查\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：服用降压药期间能吃葡萄吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"富含营养有益\", \"含糖量较高\", \"少量食用\"]}"}]}
+{"messages": [{"role": "user", "content": "用户的问题是：最近这次血糖报告比上个月高了一些，严重吗？, 请生成回答关键要点"}, {"role": "assistant", "content": "{\"answer_keypoints\": [\"先对比空腹或餐后数值\", \"结合近期饮食和用药情况\", \"继续监测血糖变化\", \"尽快带报告复诊\", \"仅供参考，具体以医生为准\"]}"}]}

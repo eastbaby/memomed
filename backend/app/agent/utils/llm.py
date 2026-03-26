@@ -38,6 +38,20 @@ def get_openai_llm_non_stream():
     )
 
 
+def get_sft_llm_non_stream():
+    """获取用于关键回答点抽取的 SFT 模型实例"""
+    return ChatOpenAI(
+        model=settings.SFT_MODEL,
+        api_key=settings.LLM_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        max_tokens=500,
+        streaming=False,
+        extra_body={
+            "enable_thinking": False
+        }
+    )
+
+
 # def get_anthropic_llm():
 #     """获取Anthropic语言模型实例
     
