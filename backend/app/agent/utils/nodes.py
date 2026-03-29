@@ -54,7 +54,7 @@ def process_input(state: AgentState) -> dict:
     # step3 针对需要store的数据进行rag store操作
     for i, item in enumerate(human_image_list):
         if i < len(human_image_store_list) and human_image_store_list[i] == "store_pending":
-            process_medical_report(item['image_url']['url'])
+            process_medical_report(item["image_url"]["url"])
             human_image_store_list[i] = "store_success"
 
 
@@ -108,6 +108,7 @@ def _decide_whether_store_image(question_message_content: list, human_image_list
         2. 无关的图片或截图
 
         请根据以上条件判断是否需要存储图片。按给定的human_image_list顺序返回结果。
+        必须输出合法的 JSON，并严格匹配给定 schema，不要输出额外说明。
         """
         
         structured_llm = llm.with_structured_output(HumanImageStoreList)

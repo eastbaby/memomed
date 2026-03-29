@@ -12,10 +12,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入模型
 from app.models.models import Base
+from app.settings import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+# 数据库连接统一从环境变量读取，避免在 alembic.ini 中存放真实连接串。
+config.set_main_option("sqlalchemy.url", settings.POSTGRES_URI_CUSTOM)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
