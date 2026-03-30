@@ -139,7 +139,9 @@ async def call_model(state: AgentState) -> dict:
     """
     llm = get_openai_llm_stream()
     tools = get_tools()
-    answer_keypoints = state.get("answer_keypoints") or await _extract_answer_keypoints(state)
+    # answer_keypoints = await _extract_answer_keypoints(state)
+    # 目前先不单独抽取关键点了(省点sft 模型 token），直接传递空列表，后续根据需要再完善这个功能
+    answer_keypoints = []
     answer_keypoints_text = "；".join(answer_keypoints) if answer_keypoints else "无"
     
     # 添加系统提示
