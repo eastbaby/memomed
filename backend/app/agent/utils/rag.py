@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import date
 from typing import Any, Literal
@@ -47,27 +48,46 @@ embeddings = DashScopeEmbeddings(
     dashscope_api_key=settings.LLM_API_KEY,
 )
 
-vector_store = PGVectorStore.create_sync(
-    engine=pg_engine,
-    table_name="report_chunks",
-    embedding_service=embeddings,
-    id_column="id",
-    content_column="content",
-    embedding_column="embedding",
-    metadata_columns=[
-        "report_id",
-        "patient_id",
-        "report_date",
-        "report_type",
-        "hospital_name",
-        "page_number",
-        "chunk_index",
-    ],
-    metadata_json_column="metadata",
-)
+class _VectorStoreProvider:
+    def __init__(self) -> None:
+        self._store: PGVectorStore | None = None
+        self._lock = asyncio.Lock()
+
+    async def get(self) -> PGVectorStore:
+        if self._store is not None:
+            return self._store
+
+        async with self._lock:
+            if self._store is None:
+                self._store = await PGVectorStore.create(
+                    engine=pg_engine,
+                    table_name="report_chunks",
+                    embedding_service=embeddings,
+                    id_column="id",
+                    content_column="content",
+                    embedding_column="embedding",
+                    metadata_columns=[
+                        "report_id",
+                        "patient_id",
+                        "report_date",
+                        "report_type",
+                        "hospital_name",
+                        "page_number",
+                        "chunk_index",
+                    ],
+                    metadata_json_column="metadata",
+                )
+        return self._store
 
 
-def extract_text_from_image(image_url: str) -> str:
+_vector_store_provider = _VectorStoreProvider()
+
+
+async def get_vector_store() -> PGVectorStore:
+    return await _vector_store_provider.get()
+
+
+async def extract_text_from_image(image_url: str) -> str:
     """从图片中提取文字
     
     Args:
@@ -78,9 +98,7 @@ def extract_text_from_image(image_url: str) -> str:
     """
     try:
         llm = get_openai_llm_non_stream()
-        # 使用大模型提取图片文字
-        # 注意：这需要模型支持图片理解能力
-        response = llm.invoke([{
+        response = await llm.ainvoke([{
             "role": "user",
             "content": [
                 {
@@ -100,22 +118,23 @@ def extract_text_from_image(image_url: str) -> str:
         raise ValueError(f"图片提取文字失败，{str(e)}")
 
 
-def extract_report_pages(image_urls: str | list[str]) -> list[dict[str, Any]]:
+async def extract_report_pages(image_urls: str | list[str]) -> list[dict[str, Any]]:
     """提取报告每一页的 OCR 内容。"""
     urls = [image_urls] if isinstance(image_urls, str) else image_urls
-    pages: list[dict[str, Any]] = []
-    for index, image_url in enumerate(urls, start=1):
-        pages.append(
-            {
-                "page_number": index,
-                "source_uri": image_url,
-                "text": extract_text_from_image(image_url),
-            }
-        )
-    return pages
+    texts = await asyncio.gather(*(extract_text_from_image(image_url) for image_url in urls))
+    return [
+        {
+            "page_number": index,
+            "source_uri": image_url,
+            "text": text,
+        }
+        for index, (image_url, text) in enumerate(zip(urls, texts, strict=True), start=1)
+    ]
 
 
-def extract_report_metadata(ocr_pages: list[dict[str, Any]], patient_hint: str | None = None) -> ReportMetadata:
+async def extract_report_metadata(
+    ocr_pages: list[dict[str, Any]], patient_hint: str | None = None
+) -> ReportMetadata:
     """从 OCR 结果里抽取报告主表所需的结构化信息。"""
     combined_text = "\n\n".join(
         f"第{page['page_number']}页:\n{page['text']}" for page in ocr_pages if page.get("text")
@@ -136,7 +155,7 @@ def extract_report_metadata(ocr_pages: list[dict[str, Any]], patient_hint: str |
 7. summary 用 1-2 句话概括即可。
 8. 必须输出合法的 JSON，并严格匹配给定 schema，不要输出额外说明。
 """
-    return structured_llm.invoke(
+    return await structured_llm.ainvoke(
         [
             {"role": "system", "content": system_prompt},
             {
@@ -226,7 +245,7 @@ def _build_chunk_documents(
     return chunk_documents
 
 
-async def _astore_report_and_chunks(
+async def store_report_and_chunks(
     ocr_pages: list[dict[str, Any]],
     report_metadata: ReportMetadata,
     source_uri: str,
@@ -280,6 +299,7 @@ async def _astore_report_and_chunks(
             raise
 
     try:
+        vector_store = await get_vector_store()
         await vector_store.aadd_documents(
             chunk_documents,
             ids=[str(uuid.uuid4()) for _ in chunk_documents],
@@ -307,24 +327,16 @@ async def _astore_report_and_chunks(
     }
 
 
-def store_report_and_chunks(
-    ocr_pages: list[dict[str, Any]],
-    report_metadata: ReportMetadata,
-    source_uri: str,
-) -> dict[str, Any]:
-    """同步包装，底层统一使用 PGEngine 的 async engine。"""
-    return pg_engine._run_as_sync(_astore_report_and_chunks(ocr_pages, report_metadata, source_uri))
-
-
-def get_rag_retriever(search_kwargs: dict | None = None):
+async def get_rag_retriever(search_kwargs: dict | None = None):
     """获取默认 RAG 检索器。"""
     kwargs = {"k": 4}
     if search_kwargs:
         kwargs.update(search_kwargs)
+    vector_store = await get_vector_store()
     return vector_store.as_retriever(search_kwargs=kwargs)
 
 
-async def _asearch_report_chunks(
+async def search_report_chunks(
     query: str,
     patient_code: str | None = None,
     report_type: str | None = None,
@@ -342,25 +354,16 @@ async def _asearch_report_chunks(
         if report_type:
             filter_dict["report_type"] = report_type
 
+    vector_store = await get_vector_store()
     return await vector_store.asimilarity_search(query=query, k=k, filter=filter_dict or None)
 
 
-def search_report_chunks(
-    query: str,
-    patient_code: str | None = None,
-    report_type: str | None = None,
-    k: int = 4,
-) -> list[Document]:
-    """按文本和 metadata 过滤搜索报告切片。"""
-    return pg_engine._run_as_sync(_asearch_report_chunks(query, patient_code, report_type, k))
-
-
-def process_medical_report(image_urls: str | list[str], patient_hint: str | None = None):
+async def process_medical_report(image_urls: str | list[str], patient_hint: str | None = None):
     """处理医疗报告图片并写入主表与向量表。"""
-    ocr_pages = extract_report_pages(image_urls)
-    report_metadata = extract_report_metadata(ocr_pages, patient_hint=patient_hint)
+    ocr_pages = await extract_report_pages(image_urls)
+    report_metadata = await extract_report_metadata(ocr_pages, patient_hint=patient_hint)
     source_uri = ocr_pages[0]["source_uri"] if len(ocr_pages) == 1 else "multi_image_upload"
-    store_result = store_report_and_chunks(ocr_pages, report_metadata, source_uri=source_uri)
+    store_result = await store_report_and_chunks(ocr_pages, report_metadata, source_uri=source_uri)
 
     return {
         "status": "success",

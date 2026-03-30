@@ -25,7 +25,7 @@ class HumanImageStoreList(BaseModel):
     human_image_store_list: list[HumanImageStoreItem]
 
 
-def process_input(state: AgentState) -> dict:
+async def process_input(state: AgentState) -> dict:
     """处理用户输入, 单独处理用户输入的图片消息
     
     Args:
@@ -48,13 +48,13 @@ def process_input(state: AgentState) -> dict:
             human_image_list.append(item)
     
     # step2 call llm 判断是否需要存储图片到数据库
-    human_image_store_list = _decide_whether_store_image(question_message_content, human_image_list)
+    human_image_store_list = await _decide_whether_store_image(question_message_content, human_image_list)
 
 
     # step3 针对需要store的数据进行rag store操作
     for i, item in enumerate(human_image_list):
         if i < len(human_image_store_list) and human_image_store_list[i] == "store_pending":
-            process_medical_report(item["image_url"]["url"])
+            await process_medical_report(item["image_url"]["url"])
             human_image_store_list[i] = "store_success"
 
 
@@ -81,7 +81,9 @@ def process_input(state: AgentState) -> dict:
     }
 
 
-def _decide_whether_store_image(question_message_content: list, human_image_list: list) -> list[Literal["store_pending", "no_store"]]:
+async def _decide_whether_store_image(
+    question_message_content: list, human_image_list: list
+) -> list[Literal["store_pending", "no_store"]]:
     """判断是否需要存储图片到数据库
     
     Args:
@@ -118,7 +120,7 @@ def _decide_whether_store_image(question_message_content: list, human_image_list
         
         system_message = {"role": "system", "content": prompt}
         user_message = {"role": "user", "content": new_content}
-        response = structured_llm.invoke([system_message, user_message])
+        response = await structured_llm.ainvoke([system_message, user_message])
         
         return [item.store_decision for item in response.human_image_store_list]
     except Exception as e:
@@ -126,7 +128,7 @@ def _decide_whether_store_image(question_message_content: list, human_image_list
 
 
 
-def call_model(state: AgentState) -> dict:
+async def call_model(state: AgentState) -> dict:
     """调用语言模型
     
     Args:
@@ -137,7 +139,7 @@ def call_model(state: AgentState) -> dict:
     """
     llm = get_openai_llm_stream()
     tools = get_tools()
-    answer_keypoints = state.get("answer_keypoints") or _extract_answer_keypoints(state)
+    answer_keypoints = state.get("answer_keypoints") or await _extract_answer_keypoints(state)
     answer_keypoints_text = "；".join(answer_keypoints) if answer_keypoints else "无"
     
     # 添加系统提示
@@ -178,7 +180,7 @@ def call_model(state: AgentState) -> dict:
                     del item['data']
     
     llm_with_tools = llm.bind_tools(tools)
-    response = llm_with_tools.invoke([system_message] + messages_copy)
+    response = await llm_with_tools.ainvoke([system_message] + messages_copy)
     return {
         "messages": [response],
         "response": response.content,
@@ -209,14 +211,14 @@ def tools_condition(state: AgentState) -> str:
     return "end"
 
 
-def _extract_answer_keypoints(state: AgentState) -> list[str]:
+async def _extract_answer_keypoints(state: AgentState) -> list[str]:
     """使用 SFT 模型提取最终回答必须覆盖的关键点"""
     question = _get_latest_user_question(state)
     if not question:
         return []
 
     llm = get_sft_llm_non_stream()
-    response = llm.invoke(
+    response = await llm.ainvoke(
         [
             {"role": "user", "content": f"用户的问题是：{question}, 请生成回答关键要点"},
         ]

@@ -45,7 +45,7 @@ def calculate(expression: str) -> str:
 
 
 @tool
-def process_medical_report_tool(image_url: str, patient_hint: str | None = None) -> str:
+async def process_medical_report_tool(image_url: str, patient_hint: str | None = None) -> str:
     """处理医疗报告图片，注意得识别图片是医疗报告才调用
     
     Args:
@@ -55,7 +55,7 @@ def process_medical_report_tool(image_url: str, patient_hint: str | None = None)
     Returns:
         处理结果
     """
-    result = process_medical_report(image_url, patient_hint=patient_hint)
+    result = await process_medical_report(image_url, patient_hint=patient_hint)
     return (
         f"处理结果: {result['message']}\n"
         f"归属人: {result['display_name']}({result['patient_code']})\n"
@@ -64,7 +64,9 @@ def process_medical_report_tool(image_url: str, patient_hint: str | None = None)
 
 
 @tool
-def search_medical_reports(query: str, patient_hint: str | None = None, report_type: str | None = None) -> str:
+async def search_medical_reports(
+    query: str, patient_hint: str | None = None, report_type: str | None = None
+) -> str:
     """搜索医疗报告
     
     Args:
@@ -75,7 +77,11 @@ def search_medical_reports(query: str, patient_hint: str | None = None, report_t
     Returns:
         搜索结果
     """
-    docs = search_report_chunks(query=query, patient_code=patient_hint, report_type=report_type)
+    docs = await search_report_chunks(
+        query=query,
+        patient_code=patient_hint,
+        report_type=report_type,
+    )
     results = [
         (
             f"内容: {doc.page_content[:300]}...\n"
