@@ -32,9 +32,8 @@ class Patient(Base):
     owner_user_id = Column(String(50), nullable=True)  # 应用拥有者标识，预留多用户能力
     patient_code = Column(String(50), nullable=False)  # 类别编码，如 self / mother / father / pet / other
     display_name = Column(String(100), nullable=False)  # 展示名称，如“妈妈”“爸爸”
-    legal_name = Column(String(100), nullable=True)  # 真实姓名或宠物登记名，便于报告归属匹配
+    patient_name = Column(String(100), nullable=True)  # 真实姓名或宠物登记名，便于报告归属匹配
     patient_type = Column(String(20), nullable=False, server_default="human")  # 成员类型，如 human / pet
-    relation_type = Column(String(50), nullable=True)  # 成员关系标识
     gender = Column(String(20), nullable=True)  # 性别，可选
     birth_date = Column(Date, nullable=True)  # 出生日期，可选
     is_active = Column(Boolean, nullable=False, server_default="true")  # 是否仍处于活跃管理状态
