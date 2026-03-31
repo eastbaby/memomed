@@ -54,6 +54,12 @@
   - 再写 `report_chunks`
   - 若 chunk 写入失败，补偿删除主表记录
 - `nodes.py` 中前置 `_extract_patient_hint(...)` 已删除，归属判断统一下沉到 `rag.py`
+- HITL 中断弹窗不显示（前端逻辑问题）：
+  - 现象1: 自定义interrupt数据结构前端不支持
+  - 修复1: 需要改成标准的hitl basemodel
+  - 现象2: 若解析后无 AI 回复直接进入中断，前端因无处挂载导致弹窗隐藏。
+  - 修复2: 后端在 `interrupt` 前新增 `notify_metadata_confirmation` 节点发送 AI 提示词，引导前端正确挂载弹窗。
+
 
 ## 当前已知限制
 - `parse_status = needs_confirm` 目前只会存库，还没有真正接入 `interrupt` 确认流程。
@@ -62,10 +68,13 @@
 - 用药提醒/管理功能还未开始建表和实现 tools。
 
 ## 推荐下一步
-- 优先做多图报告处理：
+- (done) 优先做多图报告处理：
   - 单图抽特征
   - 自动分组
   - 页序推断
   - `interrupt` 确认
-- 再补 `parse_status == needs_confirm` 的流程分支。
-- 之后再做用药管理表设计与工具实现。
+- (done) 再补 `parse_status == needs_confirm` 的流程分支。
+- 之后再做用药管理表设计与工具实现, 希望尽量通用。
+- patient结构可以复用、update生日等信息。
+
+
