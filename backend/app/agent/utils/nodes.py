@@ -588,19 +588,18 @@ def _apply_report_upload_confirmation(
                 plan["selected"] = True
         return updated_plans
 
-    # 尝试解析为 HITLResumePayload
+    # 尝试解析为 HITLResumePayload；如果出现任一 reject，则本轮待确认分组全部不通过
     try:
         resume = HITLResumePayload.model_validate(decision)
-        decisions_by_name = {d.action_name: d for d in resume.decisions if d.action_name}
+        has_reject = any(d.type == "reject" for d in resume.decisions)
     except (ValidationError, Exception):
         # 解析失败则全部确认
-        decisions_by_name = {}
+        has_reject = False
 
     for plan in updated_plans:
         if not (plan.get("needs_confirmation") and plan.get("selected") is None):
             continue
-        d = decisions_by_name.get(plan["group_id"])
-        plan["selected"] = (d is None) or (d.type != "reject")
+        plan["selected"] = not has_reject
     return updated_plans
 
 
@@ -670,7 +669,13 @@ def _apply_metadata_confirmation(plans: list[dict[str, Any]], decision: Any) -> 
     # 尝试解析为 HITLResumePayload
     try:
         resume = HITLResumePayload.model_validate(decision)
-        decisions_by_name = {d.action_name: d for d in resume.decisions if d.action_name}
+        decisions_by_name: dict[str, Any] = {}
+        for d in resume.decisions:
+            action_name = d.action_name or (
+                d.edited_action.name if d.type == "edit" and d.edited_action else None
+            )
+            if action_name:
+                decisions_by_name[action_name] = d
     except (ValidationError, Exception):
         decisions_by_name = {}
 

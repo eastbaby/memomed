@@ -102,7 +102,8 @@ CREATE TABLE report_chunks (
 # 后续需求
 
 小需求：
-alembic的url从env读取
+- hitl的拒绝模式可能要再测一测
+- hitl 如果有两个图一起apporve好像和一个图的apporve结构不一样
 
 大需求：
 当前直接使用前端demo无法区分用户user_id。后续可以拓展。
