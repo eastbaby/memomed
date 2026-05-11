@@ -1,0 +1,36 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	process_input(process_input)
+	confirm_report_uploads(confirm_report_uploads)
+	prepare_report_uploads(prepare_report_uploads)
+	notify_metadata_confirmation(notify_metadata_confirmation)
+	confirm_report_metadata(confirm_report_metadata)
+	finalize_report_uploads(finalize_report_uploads)
+	call_model(call_model)
+	tools(tools)
+	generate_response(generate_response)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> process_input;
+	call_model -. &nbsp;end&nbsp; .-> generate_response;
+	call_model -.-> tools;
+	confirm_report_metadata -.-> call_model;
+	confirm_report_metadata -.-> finalize_report_uploads;
+	confirm_report_uploads -.-> call_model;
+	confirm_report_uploads -.-> prepare_report_uploads;
+	finalize_report_uploads --> call_model;
+	notify_metadata_confirmation --> confirm_report_metadata;
+	prepare_report_uploads -.-> finalize_report_uploads;
+	prepare_report_uploads -.-> notify_metadata_confirmation;
+	process_input -.-> call_model;
+	process_input -.-> confirm_report_uploads;
+	process_input -.-> prepare_report_uploads;
+	tools --> call_model;
+	generate_response --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

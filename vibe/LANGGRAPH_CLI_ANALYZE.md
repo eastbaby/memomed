@@ -71,3 +71,41 @@ langgraph/_internal/_runnable.py (line 516)
 - 服务层：async 调 graph
 - graph 内部：遇到 async node 就直接 await
 - 遇到 sync node 就线程池桥接
+
+
+
+# 关于memory
+
+langgraph dev 在本地开发模式下，默认就是 inmem runtime，而且这个 runtime 不是“纯进程内、关掉就没”，而是默认会把 checkpoint/store 定期刷到 .langgraph_api/*.pckl 文件里。所以你看到这些文件，正是本地开发态短期记忆和运行数据落盘的结果。
+
+证据链很明确：
+
+langgraph_api.cli.run_server() 默认把 runtime_edition 设成 "inmem"，并写入环境变量 LANGGRAPH_RUNTIME_EDITION=inmem。cli.py (line 86)
+
+langgraph_runtime 会根据这个环境变量加载 langgraph_runtime_inmem 作为实际后端。init.py (line 1)
+
+这个 inmem runtime 里的 Checkpointer() 返回的是 InMemorySaver，但它的底层 PersistentDict 默认写到：
+
+.langgraph_api/.langgraph_checkpoint.1.pckl
+.langgraph_api/.langgraph_checkpoint.2.pckl
+.langgraph_api/.langgraph_checkpoint.3.pckl
+对应实现就在这里。checkpoint.py (line 1)
+
+同样，默认 store 也是 DiskBackedInMemStore，会写：
+
+.langgraph_api/store.pckl
+.langgraph_api/store.vectors.pckl
+对应实现这里。store.py (line 1)
+
+而且它还有一个后台 flush 线程，每隔一段时间把内存里的内容 sync() 到这些文件，所以这些文件会持续增长。_persistence.py (line 1)
+
+更关键的一点是：即使你自己的图里没有显式 .compile(checkpointer=...)，langgraph_api 在运行时也会把服务端拿到的 checkpointer 和 store 注入到 graph 上：
+
+yield graph_obj.copy(update={"checkpointer": checkpointer, "store": store})
+
+在这里。graph.py (line 184)
+
+所以更准确的说法是：
+
+- 对于 uv run langgraph dev 这条链路：有默认短期记忆，而且是本地 in-memory runtime + 文件落盘持久化
+- 对于你自己在 Python 里直接 graph.invoke()：如果没显式传 checkpointer，那就不一定有这套能力
