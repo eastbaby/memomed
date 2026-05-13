@@ -307,13 +307,28 @@ POST /api/agent/resume
 
 ## 前端结构
 
-不复用旧 agent UI。新增一个自定义测试页面。
+不复用旧 Next.js agent UI。旧 `frontend/` 整体移动到备份目录：
+
+```text
+frontend_legacy_backup/
+```
+
+然后重新创建 `frontend/`，使用普通 React + Vite + TypeScript 实现一个自定义测试页面。
+
+原因：
+
+- 第一版重点是验证 Agent Harness，不需要 SSR、App Router、服务端组件或 Next API Routes。
+- 前端只是 Agent Runtime 的 interaction renderer，直接调用 FastAPI 更清晰。
+- Vite 结构轻，适合快速测试聊天状态、过程事件、interrupt 和 resume。
 
 ```text
 frontend/
+  package.json
+  vite.config.ts
+  index.html
   src/
-    pages/
-      MemomedAgentPage.tsx
+    main.tsx
+    App.tsx
 
     components/
       agent/
