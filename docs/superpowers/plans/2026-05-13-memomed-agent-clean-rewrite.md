@@ -1202,10 +1202,10 @@ Run:
 
 ```bash
 cd frontend
-npm install
+pnpm install
 ```
 
-Expected: `frontend/package-lock.json` is created and dependencies install successfully.
+Expected: `frontend/pnpm-lock.yaml` is created and dependencies install successfully.
 
 - [ ] **Step 9: Run Vite build**
 
@@ -1213,7 +1213,7 @@ Run:
 
 ```bash
 cd frontend
-npm run build
+pnpm run build
 ```
 
 Expected: PASS and `dist/` is generated.
@@ -1322,7 +1322,7 @@ Run:
 
 ```bash
 cd frontend
-npm run lint
+pnpm run lint
 ```
 
 Expected: no new errors from these files.
@@ -1613,7 +1613,7 @@ Run:
 
 ```bash
 cd frontend
-npm run lint
+pnpm run lint
 ```
 
 Expected: no new component lint errors.
@@ -1735,7 +1735,7 @@ Run:
 
 ```bash
 cd frontend
-npm run build
+pnpm run build
 ```
 
 Expected: PASS.
@@ -1784,7 +1784,7 @@ Run:
 
 ```bash
 cd frontend
-npm run lint
+pnpm run lint
 ```
 
 Expected: PASS.
@@ -1802,7 +1802,7 @@ Run frontend in another terminal:
 
 ```bash
 cd frontend
-npm run dev
+pnpm run dev
 ```
 
 Open the frontend and test:

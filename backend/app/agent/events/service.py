@@ -1,0 +1,145 @@
+from typing import Literal
+
+from sqlalchemy import select
+
+from app.agent.api.schemas import AgentEvent, AgentRunResult
+from app.db import AsyncSessionLocal
+from app.models.models import MmAgentConversation, MmAgentEvent, MmAgentRun
+
+
+TriggerType = Literal["user_message", "resume_interrupt", "background_job"]
+
+
+async def persist_run_result(
+    result: AgentRunResult,
+    *,
+    trigger_type: TriggerType,
+    owner_user_id: str = "default",
+) -> None:
+    """Persist the product-facing event timeline for one agent run."""
+    if not result.events:
+        return
+
+    run_id = result.events[0].run_id or f"run_{result.thread_id}"
+    title = _title_from_events(result.events)
+    run_status = "interrupted" if result.status == "interrupted" else "completed"
+
+    async with AsyncSessionLocal() as session:
+        existing_conversation = await session.get(MmAgentConversation, result.thread_id)
+        seq_offset = existing_conversation.last_event_seq if existing_conversation else 0
+        last_event_seq = seq_offset + max(event.seq for event in result.events)
+        await session.merge(
+            MmAgentConversation(
+                id=result.thread_id,
+                owner_user_id=owner_user_id,
+                title=existing_conversation.title if existing_conversation and existing_conversation.title else title,
+                status="active",
+                langgraph_thread_id=result.thread_id,
+                last_event_seq=last_event_seq,
+            )
+        )
+        await session.merge(
+            MmAgentRun(
+                id=run_id,
+                conversation_id=result.thread_id,
+                owner_user_id=owner_user_id,
+                trigger_type=trigger_type,
+                status=run_status,
+                error=result.error,
+                run_metadata={},
+            )
+        )
+
+        for event in result.events:
+            await session.merge(_event_model(event, result.thread_id, run_id, owner_user_id, seq_offset=seq_offset))
+
+        await session.commit()
+
+
+async def list_conversations(owner_user_id: str = "default") -> list[MmAgentConversation]:
+    async with AsyncSessionLocal() as session:
+        statement = (
+            select(MmAgentConversation)
+            .where(MmAgentConversation.owner_user_id == owner_user_id)
+            .where(MmAgentConversation.status == "active")
+            .order_by(MmAgentConversation.updated_at.desc())
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+
+async def list_events(
+    conversation_id: str,
+    *,
+    owner_user_id: str = "default",
+    after_seq: int = 0,
+    limit: int = 100,
+) -> list[AgentEvent]:
+    async with AsyncSessionLocal() as session:
+        statement = (
+            select(MmAgentEvent)
+            .where(MmAgentEvent.owner_user_id == owner_user_id)
+            .where(MmAgentEvent.conversation_id == conversation_id)
+            .where(MmAgentEvent.seq > after_seq)
+            .order_by(MmAgentEvent.seq.asc())
+            .limit(limit)
+        )
+        rows = (await session.execute(statement)).scalars().all()
+        return [_event_response(row) for row in rows]
+
+
+def _title_from_events(events: list[AgentEvent]) -> str:
+    for event in events:
+        if event.event_type == "message.user" and event.content:
+            return event.content[:80]
+    return "新的健康咨询"
+
+
+def _event_model(
+    event: AgentEvent,
+    conversation_id: str,
+    run_id: str,
+    owner_user_id: str,
+    *,
+    seq_offset: int = 0,
+) -> MmAgentEvent:
+    payload = event.payload or {}
+    return MmAgentEvent(
+        id=event.id,
+        conversation_id=conversation_id,
+        turn_id=event.turn_id,
+        run_id=run_id,
+        work_item_id=event.work_item_id,
+        work_item_type=event.work_item_type,
+        owner_user_id=owner_user_id,
+        seq=seq_offset + event.seq,
+        event_type=event.event_type,
+        role=event.role,
+        visibility=event.visibility,
+        status=event.status,
+        parent_event_id=event.parent_event_id,
+        dedupe_key=event.dedupe_key,
+        title=event.title,
+        content=event.content,
+        payload=payload,
+    )
+
+
+def _event_response(row: MmAgentEvent) -> AgentEvent:
+    return AgentEvent(
+        id=row.id,
+        conversation_id=row.conversation_id,
+        turn_id=row.turn_id,
+        run_id=row.run_id,
+        work_item_id=row.work_item_id,
+        work_item_type=row.work_item_type,
+        seq=row.seq,
+        event_type=row.event_type,
+        role=row.role,
+        visibility=row.visibility,
+        status=row.status,
+        parent_event_id=row.parent_event_id,
+        dedupe_key=row.dedupe_key,
+        title=row.title,
+        content=row.content,
+        payload=row.payload or {},
+    )

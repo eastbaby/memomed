@@ -3,6 +3,8 @@ import uuid
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    BigInteger,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -11,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -113,3 +116,205 @@ class ReportChunk(Base):
 
     report = relationship("MedicalReport", back_populates="chunks")
     patient = relationship("Patient", back_populates="chunks")
+
+
+class MmCareSubject(Base):
+    """Memomed V2 健康档案主体表，可表示家庭成员或宠物。"""
+
+    __tablename__ = "mm_care_subjects"
+    __table_args__ = (
+        CheckConstraint("subject_type in ('human', 'pet')", name="ck_mm_care_subjects_subject_type"),
+        CheckConstraint("status in ('active', 'archived')", name="ck_mm_care_subjects_status"),
+        Index("idx_mm_care_subjects_owner_status", "owner_user_id", "status"),
+        Index("idx_mm_care_subjects_type", "subject_type"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_user_id = Column(String(64), nullable=False, server_default="default")
+    subject_type = Column(String(20), nullable=False)
+    display_name = Column(String(100), nullable=False)
+    legal_name = Column(String(100), nullable=True)
+    relation_type = Column(String(30), nullable=True)
+    species = Column(String(30), nullable=True)
+    breed = Column(String(100), nullable=True)
+    gender = Column(String(20), nullable=True)
+    birth_date = Column(Date, nullable=True)
+    status = Column(String(20), nullable=False, server_default="active")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    aliases = relationship(
+        "MmCareSubjectAlias",
+        back_populates="subject",
+        cascade="all, delete-orphan",
+    )
+
+
+class MmCareSubjectAlias(Base):
+    """Memomed V2 健康档案主体别名表。"""
+
+    __tablename__ = "mm_care_subject_aliases"
+    __table_args__ = (
+        CheckConstraint("source in ('user', 'ai', 'system')", name="ck_mm_care_subject_aliases_source"),
+        CheckConstraint("status in ('active', 'archived')", name="ck_mm_care_subject_aliases_status"),
+        Index("idx_mm_care_subject_aliases_subject_id", "subject_id"),
+        Index("idx_mm_care_subject_aliases_normalized_alias", "normalized_alias"),
+        Index("uq_mm_care_subject_aliases_subject_alias", "subject_id", "normalized_alias", unique=True),
+        Index(
+            "uq_mm_care_subject_aliases_owner_active_alias",
+            "owner_user_id",
+            "normalized_alias",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("mm_care_subjects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_user_id = Column(String(64), nullable=False, server_default="default")
+    alias = Column(String(100), nullable=False)
+    normalized_alias = Column(String(100), nullable=False)
+    source = Column(String(20), nullable=False, server_default="user")
+    status = Column(String(20), nullable=False, server_default="active")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    subject = relationship("MmCareSubject", back_populates="aliases")
+
+
+class MmAgentConversation(Base):
+    """Memomed Agent 产品会话表。"""
+
+    __tablename__ = "mm_agent_conversations"
+    __table_args__ = (
+        CheckConstraint("status in ('active', 'archived')", name="ck_mm_agent_conversations_status"),
+        Index("idx_mm_agent_conversations_owner_status", "owner_user_id", "status"),
+        Index("idx_mm_agent_conversations_updated_at", "updated_at"),
+    )
+
+    id = Column(String(100), primary_key=True)
+    owner_user_id = Column(String(64), nullable=False, server_default="default")
+    title = Column(String(200), nullable=True)
+    status = Column(String(20), nullable=False, server_default="active")
+    langgraph_thread_id = Column(String(100), nullable=False)
+    last_event_seq = Column(BigInteger, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+
+    runs = relationship("MmAgentRun", back_populates="conversation", cascade="all, delete-orphan")
+    events = relationship("MmAgentEvent", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class MmAgentRun(Base):
+    """Memomed Agent 单次执行表。"""
+
+    __tablename__ = "mm_agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "trigger_type in ('user_message', 'resume_interrupt', 'background_job')",
+            name="ck_mm_agent_runs_trigger_type",
+        ),
+        CheckConstraint(
+            "status in ('running', 'completed', 'interrupted', 'failed', 'cancelled')",
+            name="ck_mm_agent_runs_status",
+        ),
+        Index("idx_mm_agent_runs_conversation_started", "conversation_id", "started_at"),
+        Index("idx_mm_agent_runs_owner_status", "owner_user_id", "status"),
+    )
+
+    id = Column(String(100), primary_key=True)
+    conversation_id = Column(
+        String(100),
+        ForeignKey("mm_agent_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_user_id = Column(String(64), nullable=False, server_default="default")
+    trigger_type = Column(String(30), nullable=False)
+    status = Column(String(30), nullable=False, server_default="running")
+    langgraph_run_id = Column(String(100), nullable=True)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    error = Column(Text, nullable=True)
+    run_metadata = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+    conversation = relationship("MmAgentConversation", back_populates="runs")
+    events = relationship("MmAgentEvent", back_populates="run")
+
+
+class MmAgentEvent(Base):
+    """Memomed Agent 产品时间线事件表。"""
+
+    __tablename__ = "mm_agent_events"
+    __table_args__ = (
+        CheckConstraint(
+            "role is null or role in ('user', 'assistant', 'tool', 'system')",
+            name="ck_mm_agent_events_role",
+        ),
+        CheckConstraint(
+            "visibility in ('visible', 'collapsed', 'debug', 'hidden')",
+            name="ck_mm_agent_events_visibility",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'streaming', 'completed', 'failed')",
+            name="ck_mm_agent_events_status",
+        ),
+        Index("idx_mm_agent_events_conversation_seq", "conversation_id", "seq", unique=True),
+        Index("idx_mm_agent_events_turn_id", "turn_id"),
+        Index("idx_mm_agent_events_work_item_id", "work_item_id"),
+        Index("idx_mm_agent_events_run_id", "run_id"),
+        Index("idx_mm_agent_events_owner_conversation", "owner_user_id", "conversation_id"),
+        Index(
+            "uq_mm_agent_events_run_dedupe_key",
+            "run_id",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("dedupe_key is not null"),
+        ),
+    )
+
+    id = Column(String(100), primary_key=True)
+    conversation_id = Column(
+        String(100),
+        ForeignKey("mm_agent_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    turn_id = Column(String(100), nullable=True)
+    run_id = Column(String(100), ForeignKey("mm_agent_runs.id", ondelete="SET NULL"), nullable=True)
+    work_item_id = Column(String(100), nullable=True)
+    work_item_type = Column(String(60), nullable=True)
+    owner_user_id = Column(String(64), nullable=False, server_default="default")
+    seq = Column(BigInteger, nullable=False)
+    event_type = Column(String(40), nullable=False)
+    role = Column(String(20), nullable=True)
+    visibility = Column(String(20), nullable=False, server_default="visible")
+    status = Column(String(20), nullable=False, server_default="completed")
+    parent_event_id = Column(String(100), nullable=True)
+    dedupe_key = Column(String(200), nullable=True)
+    title = Column(String(200), nullable=True)
+    content = Column(Text, nullable=True)
+    payload = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    conversation = relationship("MmAgentConversation", back_populates="events")
+    run = relationship("MmAgentRun", back_populates="events")
