@@ -136,11 +136,11 @@ flowchart TD
 - 前端只消费 Memomed Event Protocol，不直接消费 LangGraph checkpoint。
 - LangGraph 的 `thread_id` 使用 `conversation_id`。
 - 每次用户发送消息或完成 interrupt 都创建一个新的 `run_id`。
-- `run_id` 是执行边界，`work_item_id` 是 UI 折叠边界。
-- 一个 `work_item_id` 可以跨多个 `run_id`，例如“确认健康档案对象”会跨用户选择前后的两次执行。
+- `run_id` 是执行边界，`work_item_id` 是本次执行内的 UI 折叠边界。
+- 一个 `work_item_id` 默认只属于一个 `run_id`。即使两次 run 都在做“确认健康档案对象”，前端也应该展示为两段独立过程，而不是永久续写同一个折叠块。
 - 后端把 LangGraph streaming chunk 转换成 Memomed 标准事件。
 - 前端按 `event_id` upsert，按 `seq` 排序，不按纯文本 append。
-- 前端按 `work_item_id` 聚合过程卡片，而不是按 tool 或 run 聚合。
+- 前端在同一 run 内按 `work_item_id` 聚合过程卡片，不跨 run 合并过程卡片。
 
 ## 数据模型建议
 
@@ -304,14 +304,15 @@ work_item: user_review / 入库前审核
 - 写库
 ```
 
-一个 work item 可以包含多个 tool，也可以跨多个 run：
+一个 work item 可以包含多个 tool，但默认只属于一次 run：
 
 ```text
-Run 1：识别对象不确定，发出 interrupt.requested
-Run 2：用户选择后 resume，确认对象成功
-
-这两个 run 都属于同一个 work_item_id = subject_resolution_xxx
+Run 1：识别对象不确定，发出 interrupt.requested，对应一个 subject_resolution work item
+Run 2：用户选择后 resume，继续确认对象，对应一个新的 subject_resolution work item
+Run 3：用户又发起新的报告查询，再创建新的 subject_resolution work item
 ```
+
+这样更接近 Codex/ChatGPT 的过程块体验：过程块是“本次回复/本次执行”的中间过程，不是整段会话里永久续写的容器。跨 run 的业务关联可以放在 `payload.pending_action_id`、标题或后续审计字段里表达，不应该让前端把不同 run 的过程折叠到同一个 UI 卡片中。
 
 第一版先落地以下类型：
 
@@ -382,6 +383,51 @@ Run 2：用户选择后 resume，确认对象成功
   }
 }
 ```
+
+### 助手回复增量
+
+`message.assistant.delta` 使用真正的增量语义：`content` 只包含本次新增的 token/chunk，不是累计后的完整文本。
+
+```json
+{
+  "id": "evt_delta_001",
+  "conversation_id": "conv_001",
+  "run_id": "run_001",
+  "seq": 8,
+  "event_type": "message.assistant.delta",
+  "role": "assistant",
+  "visibility": "visible",
+  "status": "streaming",
+  "content": "你",
+  "payload": {
+    "message_id": "msg_001",
+    "delta": true,
+    "delta_index": 1,
+    "offset": 1
+  }
+}
+```
+
+下一条 delta：
+
+```json
+{
+  "event_type": "message.assistant.delta",
+  "content": "好",
+  "payload": {
+    "message_id": "msg_001",
+    "delta_index": 2,
+    "offset": 2
+  }
+}
+```
+
+前端规则：
+
+- 同一 `message_id` 的 delta 拼接成一条 streaming 助手气泡。
+- `delta_index` 用于同一条消息内部排序和去重。
+- `seq` 仍用于 conversation 全局事件顺序，不用于直接拼接 token。
+- `message.assistant.completed.content` 是最终权威完整文本，历史回放优先展示 completed，不需要重放 delta。
 
 ### 工具调用
 
@@ -630,6 +676,104 @@ InMemorySaver 或 SqliteSaver
 
 但只要需要页面刷新后继续 interrupt，就不能依赖 `InMemorySaver`。
 
+### 结构化 Agent State 与通用 Tool Loop
+
+Memomed 的 graph state 不能只依赖自然语言 `handoff_context`。`handoff_context` 只给 LLM 组织回复使用，不能作为程序控制事实源。
+
+最新实现已经从 `current_subject` 这种对象识别特例，调整为通用工具状态机制：
+
+```json
+{
+  "agent_context": {
+    "subject": {
+      "subject_id": "subject_mother",
+      "display_name": "妈妈",
+      "patient_type": "human"
+    }
+  },
+  "satisfied_capabilities": {
+    "subject_resolution": {
+      "turn_key": "查一下我妈之前的指标",
+      "message": "已确认这次管理对象是妈妈（成员）。",
+      "data": {
+        "patient": {
+          "subject_id": "subject_mother",
+          "display_name": "妈妈",
+          "patient_type": "human"
+        }
+      }
+    }
+  },
+  "tool_observations": [
+    {
+      "tool_name": "query_health_records_tool",
+      "capability": "health_records_query",
+      "status": "capability_missing",
+      "message": "已确认健康档案对象，但报告查询工具尚未接入。",
+      "data": {
+        "subject_id": "subject_mother",
+        "record_type": "physical_exam"
+      }
+    }
+  ],
+  "active_tool_turn_key": "查一下我妈之前的指标",
+  "active_tool_call_count": 1
+}
+```
+
+字段含义：
+
+| 字段 | 含义 |
+| --- | --- |
+| `agent_context` | 当前 run/turn 已确认的结构化业务上下文，例如 `subject`。它是后续工具参数和提示词上下文来源。 |
+| `satisfied_capabilities` | 当前用户 turn 内已经完成的能力表，例如 `subject_resolution`。用于避免同一轮重复调用同一个已满足能力。 |
+| `satisfied_capabilities.*.turn_key` | 该能力对应的用户消息文本。只有等于最新用户消息时，runtime 才认为“本轮已满足”。 |
+| `tool_observations` | 最近工具观察结果。无论成功、失败、`capability_missing`，都应该进入下一轮 LLM 上下文。 |
+| `active_tool_turn_key` | 当前连续工具链所属用户消息。用户新发一轮消息后，工具计数应重新开始。 |
+| `active_tool_call_count` | 当前连续工具链内的工具调用次数，用于熔断异常工具循环。 |
+
+运行时规则：
+
+- 工具返回 `success` 或 `already_satisfied` 后，可以写入 `satisfied_capabilities[capability]`。
+- 对象确认只是 `subject_resolution` 这个 capability 的一种结果，不再是 agent loop 的硬编码特例。
+- 同一轮用户消息内，如果 LLM 再次调用已满足能力，runtime 返回 `already_satisfied`，不再次执行真实工具。
+- 同一个 thread 的下一轮用户消息可以再次调用相同 capability，因为 `turn_key` 已经不同。
+- `tool_observations` 必须保留给下一轮 LLM；不能因为存在 `agent_context.subject` 就删除最新 `ToolMessage`。
+- `capability_missing` 不是错误熔断条件，而是正常工具观察结果。LLM 下一步应该基于它输出最终自然语言说明。
+- 工具循环熔断只统计当前连续工具链，不扫描整个 thread 历史 tool call，避免 interrupt 前的工具调用污染 resume 后流程。
+- 旧 pending interrupt 的 tool trace 可以在 handoff 后精确清理，但不能清理正常完成的工具 observation。
+
+这避免了两个常见错误：
+
+```text
+错误 1：
+用户选择妈妈
+→ 只写 handoff_context：“已确认妈妈”
+→ LLM 仍然再次调用 resolve_patient_tool
+→ graph 再次进入 interrupt
+→ 没有最终助手回复
+```
+
+```text
+错误 2：
+query_health_records_tool 返回 capability_missing
+→ runtime 因为已有 subject，把最新 ToolMessage 删掉
+→ LLM 看不到“工具尚未接入”
+→ LLM 继续尝试调用查询工具
+→ 工具轮次熔断后进入 final_answer_missing
+```
+
+正确做法是：
+
+```text
+用户选择妈妈
+→ 写入 agent_context.subject
+→ 写入 satisfied_capabilities.subject_resolution
+→ LLM 可以基于 subject_id 调用后续工具
+→ 后续工具 observation 继续写入 tool_observations
+→ LLM 基于最新 observation 输出最终回复
+```
+
 ## 避免重复过程消息的规则
 
 当前重复的根因是：后端每次返回一批普通 JSON，前端直接 append；而 process event 没有稳定 ID，也没有区分“历史已有事件”和“本次新增事件”。
@@ -641,7 +785,7 @@ InMemorySaver 或 SqliteSaver
 - 每个事件生成稳定 `event_id`。
 - 每个 conversation 内 `seq` 单调递增。
 - 同一 run 内同一语义步骤使用 `dedupe_key`。
-- 同一用户可理解工作阶段使用同一个 `work_item_id`，即使它跨了 interrupt/resume。
+- 同一 run 内的同一用户可理解工作阶段使用同一个 `work_item_id`；不同 run 不复用 `work_item_id`。
 - API 返回“本次新产生事件”或 SSE 实时事件，不重复返回历史事件。
 - 如果返回历史事件，必须通过 `GET /events` 明确回放。
 
@@ -649,7 +793,7 @@ InMemorySaver 或 SqliteSaver
 
 - 按 `event_id` upsert，不做无脑 append。
 - 按 `seq` 排序。
-- 按 `work_item_id` 聚合过程卡片，不按 tool 或 run 展示一堆碎片卡片。
+- 在同一 run 内按 `work_item_id` 聚合过程卡片，不把不同 run 的同类过程合并成一个卡片。
 - 同一个 `interrupt.requested` 如果还是 `pending`，只展示一张卡片。
 - `status` 从 `streaming` 变成 `completed` 时更新原事件，不新增一个看起来相同的事件。
 
@@ -692,12 +836,81 @@ Memomed 不需要完全复制 Codex 的实现，但可以学习它的体验原�
 - 前端改成 event reducer，通过 `event_id` 去重。
 - 解决重复过程消息。
 
+当前落地状态：
+
+- 已创建 `mm_agent_conversations`、`mm_agent_runs`、`mm_agent_events`，并通过迁移补充 `turn_id`、`work_item_id`、`work_item_type`。
+- 已让 `/chat` 和 `/resume` 返回标准 `events`，前端以 `event_id` upsert 并按 `seq` 排序。
+- 已让同一个 run 内的用户可理解工作阶段通过 `work_item_id` 聚合为一个折叠块；不同 run 的对象确认会显示为各自独立的“确认健康档案对象”过程。
+- 已在 resume 时写入 `interrupt.resumed` 事件，并将旧的 pending `interrupt.requested` 标记为 `completed`，避免历史回放时旧确认卡片再次出现。
+- 当前 `work_item_type` 只对已实现的对象识别链路落为 `subject_resolution`；后续新增报告入库、健康问答等工具时，再把各自 runtime 事件映射为 `report_ingestion`、`evidence_retrieval` 等类型。
+
 ### 阶段 2：SSE streaming
 
 - 新增 `/runs/stream` 和 `/runs/resume/stream`。
 - 后端将 LangGraph stream chunk 转换成 Memomed event。
 - 前端实时消费 SSE。
 - 助手回复支持 delta 流式展示。
+
+当前落地状态：
+
+- 已新增 `POST /api/agent/conversations/{conversation_id}/runs/stream`。
+- 已新增 `POST /api/agent/conversations/{conversation_id}/runs/resume/stream`。
+- 已定义 SSE 事件名：
+  - `agent_event`：单条 Memomed `AgentEvent`。
+  - `run_result`：本次执行的最终 `AgentRunResult`，用于同步最终状态和 `interrupt`。
+  - `done`：流结束标记。
+- 前端已通过 `fetch` + `ReadableStream` 消费 SSE，因为标准 `EventSource` 不支持 POST body。
+- 前端收到 `agent_event` 后立即走同一个 reducer：按 `event_id` upsert，按 `seq` 排序。
+
+当前阶段 2 已升级为 LangGraph 真流式：
+
+- streaming endpoint 使用 `graph.astream(..., stream_mode=["updates", "messages", "custom"])`。
+- `updates` 负责把节点完成后的 graph state 转换成稳定的 Memomed `AgentEvent`。
+- `messages` 负责把最终助手回复转换成 `message.assistant.delta`，支持前端 token/小片段级流式展示。
+- `custom` 负责工具或节点内部的即时过程事件，例如“开始调用工具”“工具返回”“正在处理用户确认结果”。
+- 后端不再只依赖节点结束后的 `updates`，而是在工具执行内部用 LangGraph `get_stream_writer()` 主动写出过程事件。
+- runtime 会把 `custom` 事件立即转成 `process.group.started` / `process.step` 发给前端，同时保证流式下发的 `seq` 单调递增。
+- streaming runtime 会避免把 `continue_pending_action` 的工具结果提前当成最终助手回复；只有 `final_answer` 节点产出的文本才会形成最终助手消息。
+- SSE 响应头包含 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，避免代理层把流式事件缓存成批量返回。
+
+重要设计约束：
+
+- 过程事件不是最终回答。`process.step` 进入折叠过程卡片，`message.assistant.delta/completed` 才进入助手气泡。
+- 工具内部可以产生多个 `custom` 过程事件，但前端仍按 `work_item_id` 聚合成一个用户可理解的折叠块。
+- `run_result` 只是本次执行最终同步包，前端实时渲染不能等它回来后再一次性 append。
+- 如果同一个 `process.group.started` 后续从 `streaming` 更新为 `completed`，前端按同一个 `event_id` upsert，不新增第二个折叠块。
+- 实时 SSE 和历史回放必须走同一个前端事件归一化函数。历史加载不能直接 `setEvents(history.events)`，否则会绕过 `runtime.note` 隐藏、过程去重、delta 合并等规则，导致刷新前后展示不一致。
+
+### 前端消息渲染
+
+助手最终回复允许使用 Markdown，但前端必须区分“助手正文”和“Agent 过程”：
+
+- `message.assistant.delta` / `message.assistant.completed` 进入助手气泡，可用 Markdown 渲染。
+- `process.group.started` / `process.step` 进入折叠过程卡片，不作为正文 Markdown。
+- `interrupt.requested` 进入交互卡片，不作为 Markdown 文本。
+- 用户消息保持纯文本展示，避免用户输入被误渲染为 Markdown 或 HTML。
+
+当前前端采用：
+
+```text
+react-markdown
+remark-gfm
+rehype-sanitize
+```
+
+设计原因：
+
+- `react-markdown` 适合 React/Vite 聊天气泡内渲染 Markdown。
+- `remark-gfm` 支持表格、任务列表、删除线、自动链接，适合健康指标和报告摘要展示。
+- `rehype-sanitize` 对 LLM 输出做安全过滤，避免 HTML/XSS 风险。
+
+渲染约束：
+
+- 不使用 `dangerouslySetInnerHTML` 渲染 LLM 输出。
+- 不使用 MDX 渲染 LLM 输出，避免组件执行能力过强。
+- 链接应默认新窗口打开，并加 `rel="noreferrer"`。
+- 表格、代码块、列表需要自定义样式，保证在聊天气泡内可读且不撑破布局。
+- 流式输出和历史 completed message 必须使用同一个 Markdown renderer，避免实时与刷新后展示不一致。
 
 ### 阶段 3：持久化恢复
 

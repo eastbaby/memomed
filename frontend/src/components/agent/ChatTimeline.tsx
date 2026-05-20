@@ -1,5 +1,6 @@
 import { Bot, User } from 'lucide-react'
 import type { AgentEvent } from '@/types/agent'
+import { MarkdownMessage } from './MarkdownMessage'
 import { ProcessEventCard } from './ProcessEventCard'
 
 export function ChatTimeline({ events }: { events: AgentEvent[] }) {
@@ -12,8 +13,8 @@ export function ChatTimeline({ events }: { events: AgentEvent[] }) {
           return <MessageBubble key={event.id} role="user" content={event.content ?? ''} />
         }
 
-        if (event.event_type === 'message.assistant.completed') {
-          return <MessageBubble key={event.id} role="assistant" content={event.content ?? ''} />
+        if (event.event_type === 'message.assistant.delta' || event.event_type === 'message.assistant.completed') {
+          return <MessageBubble key={event.id} role="assistant" content={event.content ?? ''} streaming={event.event_type === 'message.assistant.delta'} />
         }
 
         if (event.event_type === 'process.group.started') {
@@ -29,12 +30,13 @@ export function ChatTimeline({ events }: { events: AgentEvent[] }) {
   )
 }
 
-function MessageBubble({ role, content }: { role: 'user' | 'assistant'; content: string }) {
+function MessageBubble({ role, content, streaming = false }: { role: 'user' | 'assistant'; content: string; streaming?: boolean }) {
   return (
     <div className={`flex gap-3 ${role === 'user' ? 'justify-end' : 'justify-start'}`}>
       {role === 'assistant' ? <Bot className="mt-2 text-teal-700" size={20} /> : null}
       <div className={`max-w-[78%] rounded-3xl px-5 py-3 shadow-sm ${role === 'user' ? 'bg-stone-950 text-white' : 'border border-stone-200 bg-white text-stone-950'}`}>
-        {content}
+        {role === 'assistant' ? <MarkdownMessage content={content} /> : content}
+        {streaming ? <span className="ml-1 inline-block h-4 animate-pulse border-r-2 border-teal-700 align-[-0.12em]" /> : null}
       </div>
       {role === 'user' ? <User className="mt-2 text-stone-700" size={20} /> : null}
     </div>

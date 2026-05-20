@@ -10,6 +10,8 @@ ToolStatus = Literal[
     "needs_user_confirmation",
     "needs_user_selection",
     "needs_user_input",
+    "already_satisfied",
+    "capability_missing",
     "not_applicable",
     "error",
 ]

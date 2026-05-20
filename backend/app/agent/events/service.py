@@ -1,6 +1,6 @@
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.agent.api.schemas import AgentEvent, AgentRunResult
 from app.db import AsyncSessionLocal
@@ -22,7 +22,7 @@ async def persist_run_result(
 
     run_id = result.events[0].run_id or f"run_{result.thread_id}"
     title = _title_from_events(result.events)
-    run_status = "interrupted" if result.status == "interrupted" else "completed"
+    run_status = _run_status_from_result(result)
 
     async with AsyncSessionLocal() as session:
         existing_conversation = await session.get(MmAgentConversation, result.thread_id)
@@ -49,6 +49,9 @@ async def persist_run_result(
                 run_metadata={},
             )
         )
+
+        if trigger_type == "resume_interrupt":
+            await session.execute(_pending_interrupt_completion_statement(result.thread_id, owner_user_id))
 
         for event in result.events:
             await session.merge(_event_model(event, result.thread_id, run_id, owner_user_id, seq_offset=seq_offset))
@@ -87,11 +90,34 @@ async def list_events(
         return [_event_response(row) for row in rows]
 
 
+async def get_last_event_seq(conversation_id: str, owner_user_id: str = "default") -> int:
+    async with AsyncSessionLocal() as session:
+        conversation = await session.get(MmAgentConversation, conversation_id)
+        if not conversation or conversation.owner_user_id != owner_user_id:
+            return 0
+        return int(conversation.last_event_seq or 0)
+
+
+def apply_conversation_seq_offset(result: AgentRunResult, *, seq_offset: int) -> AgentRunResult:
+    shifted = result.model_copy(deep=True)
+    for event in shifted.events:
+        event.seq = seq_offset + event.seq
+    return shifted
+
+
 def _title_from_events(events: list[AgentEvent]) -> str:
     for event in events:
         if event.event_type == "message.user" and event.content:
             return event.content[:80]
     return "新的健康咨询"
+
+
+def _run_status_from_result(result: AgentRunResult) -> str:
+    if result.status == "interrupted":
+        return "interrupted"
+    if result.status == "error":
+        return "failed"
+    return "completed"
 
 
 def _event_model(
@@ -121,6 +147,17 @@ def _event_model(
         title=event.title,
         content=event.content,
         payload=payload,
+    )
+
+
+def _pending_interrupt_completion_statement(conversation_id: str, owner_user_id: str):
+    return (
+        update(MmAgentEvent)
+        .where(MmAgentEvent.conversation_id == conversation_id)
+        .where(MmAgentEvent.owner_user_id == owner_user_id)
+        .where(MmAgentEvent.event_type == "interrupt.requested")
+        .where(MmAgentEvent.status == "pending")
+        .values(status="completed")
     )
 
 

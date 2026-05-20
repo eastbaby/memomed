@@ -52,6 +52,9 @@ async def resolve_patient_tool(user_text: str) -> dict:
     """判断本轮聊天要管理哪个家庭成员或宠物的健康档案。"""
     text = user_text.strip()
     candidates = await list_subject_candidates()
+    grounding = _first_person_grounding(text, candidates)
+    if grounding:
+        return _tool_result_from_grounding(text, grounding, candidates)
     grounding = await classify_patient_grounding(text, candidates)
     return _tool_result_from_grounding(text, grounding, candidates)
 
@@ -108,6 +111,8 @@ async def classify_patient_grounding(
                         "你只输出结构化结果，不回答用户。"
                         "目标是根据现有健康档案主体列表，判断用户要管理的是哪个人或哪只宠物。"
                         "不要把所有格“我的”直接理解为用户本人；例如“我的猫咪”主体是宠物猫。"
+                        "但第一人称“我、本人、自己、我上次、我之前”通常表示用户本人；"
+                        "如果候选列表里存在 display_name 或 alias 为“我”的人物主体，应优先高置信匹配该主体。"
                         "只有当主体能和候选列表中的 subject_id 唯一匹配时，resolution_status=resolved 并填写 matched_subject_id。"
                         "如果用户只说家人、这份报告、帮忙存一下但没有主体，resolution_status=ambiguous。"
                         "如果和人或宠物健康档案无关，resolution_status=not_applicable。"
@@ -202,6 +207,49 @@ def _find_candidate(subject_id: str | None, candidates: list[SubjectCandidate]) 
     if not subject_id:
         return None
     return next((candidate for candidate in candidates if candidate.subject_id == subject_id), None)
+
+
+def _first_person_grounding(user_text: str, candidates: list[SubjectCandidate]) -> PatientGrounding | None:
+    self_candidate = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.patient_type == "human" and "我" in {candidate.display_name, *candidate.aliases}
+        ),
+        None,
+    )
+    if not self_candidate:
+        return None
+    if not _looks_like_first_person_subject(user_text):
+        return None
+    return PatientGrounding(
+        intent="human_health",
+        resolution_status="resolved",
+        matched_subject_id=self_candidate.subject_id,
+        patient_code=self_candidate.patient_code,
+        display_name=self_candidate.display_name,
+        patient_type=self_candidate.patient_type,
+        confidence="high",
+        reason="用户使用第一人称主语描述自己的健康信息。",
+        next_action="continue",
+    )
+
+
+def _looks_like_first_person_subject(user_text: str) -> bool:
+    first_person_patterns = (
+        "我上次",
+        "我之前",
+        "我最近",
+        "我现在",
+        "我去年",
+        "我今年",
+        "我吃",
+        "我用",
+        "我服",
+        "我查",
+        "我看",
+    )
+    return any(pattern in user_text for pattern in first_person_patterns)
 
 
 def _selection_options(candidates: list[SubjectCandidate]) -> list[SelectOption]:

@@ -46,7 +46,7 @@ export type AgentEvent = {
 }
 
 export type ProcessEvent = {
-  type: string
+  step_type: string
   text: string
 }
 

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:agent": "node --test --experimental-strip-types test/*.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +16,9 @@
     "lucide-react": "^0.577.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "react-markdown": "^10.1.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.1.17",
     "vite": "^7.2.7"
   },
