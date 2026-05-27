@@ -1,6 +1,6 @@
 from typing import Literal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.agent.api.schemas import AgentEvent, AgentRunResult
 from app.db import AsyncSessionLocal
@@ -15,19 +15,26 @@ async def persist_run_result(
     *,
     trigger_type: TriggerType,
     owner_user_id: str = "default",
-) -> None:
+) -> AgentRunResult:
     """Persist the product-facing event timeline for one agent run."""
     if not result.events:
-        return
+        return result
 
-    run_id = result.events[0].run_id or f"run_{result.thread_id}"
+    run_id = result.events[0].run_id
+    if not run_id:
+        raise ValueError("Agent run result events must include run_id before persistence.")
     title = _title_from_events(result.events)
     run_status = _run_status_from_result(result)
 
     async with AsyncSessionLocal() as session:
-        existing_conversation = await session.get(MmAgentConversation, result.thread_id)
+        await session.execute(_conversation_seq_lock_statement(result.thread_id))
+        existing_conversation = (
+            await session.execute(_conversation_for_update_statement(result.thread_id))
+        ).scalar_one_or_none()
         seq_offset = existing_conversation.last_event_seq if existing_conversation else 0
-        last_event_seq = seq_offset + max(event.seq for event in result.events)
+        persisted_result = assign_conversation_seq(result, seq_offset=seq_offset)
+        persisted_events = persisted_result.events
+        last_event_seq = max(event.seq for event in persisted_events if event.seq is not None)
         await session.merge(
             MmAgentConversation(
                 id=result.thread_id,
@@ -53,10 +60,19 @@ async def persist_run_result(
         if trigger_type == "resume_interrupt":
             await session.execute(_pending_interrupt_completion_statement(result.thread_id, owner_user_id))
 
-        for event in result.events:
-            await session.merge(_event_model(event, result.thread_id, run_id, owner_user_id, seq_offset=seq_offset))
+        for event in persisted_events:
+            await session.merge(_event_model(event, result.thread_id, run_id, owner_user_id))
 
         await session.commit()
+        return persisted_result
+
+
+def _conversation_seq_lock_statement(conversation_id: str):
+    return select(func.pg_advisory_xact_lock(func.hashtext(conversation_id)))
+
+
+def _conversation_for_update_statement(conversation_id: str):
+    return select(MmAgentConversation).where(MmAgentConversation.id == conversation_id).with_for_update()
 
 
 async def list_conversations(owner_user_id: str = "default") -> list[MmAgentConversation]:
@@ -90,18 +106,13 @@ async def list_events(
         return [_event_response(row) for row in rows]
 
 
-async def get_last_event_seq(conversation_id: str, owner_user_id: str = "default") -> int:
-    async with AsyncSessionLocal() as session:
-        conversation = await session.get(MmAgentConversation, conversation_id)
-        if not conversation or conversation.owner_user_id != owner_user_id:
-            return 0
-        return int(conversation.last_event_seq or 0)
-
-
-def apply_conversation_seq_offset(result: AgentRunResult, *, seq_offset: int) -> AgentRunResult:
+def assign_conversation_seq(result: AgentRunResult, *, seq_offset: int) -> AgentRunResult:
     shifted = result.model_copy(deep=True)
-    for event in shifted.events:
-        event.seq = seq_offset + event.seq
+    ordinals = [event.ordinal for event in shifted.events]
+    if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
+        raise ValueError("Agent run events must have contiguous 1-based ordinal values.")
+    for index, event in enumerate(shifted.events, start=1):
+        event.seq = seq_offset + index
     return shifted
 
 
@@ -125,10 +136,10 @@ def _event_model(
     conversation_id: str,
     run_id: str,
     owner_user_id: str,
-    *,
-    seq_offset: int = 0,
 ) -> MmAgentEvent:
-    payload = event.payload or {}
+    if event.seq is None:
+        raise ValueError("Agent event must have conversation seq before persistence.")
+    payload = {**(event.payload or {}), "ordinal": event.ordinal}
     return MmAgentEvent(
         id=event.id,
         conversation_id=conversation_id,
@@ -137,7 +148,7 @@ def _event_model(
         work_item_id=event.work_item_id,
         work_item_type=event.work_item_type,
         owner_user_id=owner_user_id,
-        seq=seq_offset + event.seq,
+        seq=event.seq,
         event_type=event.event_type,
         role=event.role,
         visibility=event.visibility,
@@ -162,6 +173,7 @@ def _pending_interrupt_completion_statement(conversation_id: str, owner_user_id:
 
 
 def _event_response(row: MmAgentEvent) -> AgentEvent:
+    payload = row.payload or {}
     return AgentEvent(
         id=row.id,
         conversation_id=row.conversation_id,
@@ -169,6 +181,7 @@ def _event_response(row: MmAgentEvent) -> AgentEvent:
         run_id=row.run_id,
         work_item_id=row.work_item_id,
         work_item_type=row.work_item_type,
+        ordinal=int(payload["ordinal"]),
         seq=row.seq,
         event_type=row.event_type,
         role=row.role,
@@ -178,5 +191,5 @@ def _event_response(row: MmAgentEvent) -> AgentEvent:
         dedupe_key=row.dedupe_key,
         title=row.title,
         content=row.content,
-        payload=row.payload or {},
+        payload=payload,
     )

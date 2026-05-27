@@ -2,6 +2,8 @@
 
 日期：2026-05-17
 
+最近校准：2026-05-25。本文保留最初设计背景，但“当前实现”以 2026-05-25 代码为准：实时 SSE 和最终 `run_result.events` 已经共用同一份 `AgentEvent` emitter buffer；旧的 `process_events` state/API 中间层已经删除。
+
 ## 背景
 
 当前 Memomed 已经跑通了最小 Agent Loop：
@@ -29,11 +31,11 @@
 
 第一阶段目标：
 
-- 建立标准的 `conversation_id / run_id / event_id / seq` 概念。
+- 建立标准的 `conversation_id / run_id / event_id / ordinal / seq` 概念。
 - 支持历史会话展示和继续上次会话。
 - 支持 Agent 过程折叠展示，过程事件不重复、不丢失、不含糊。
 - 支持 HITL interrupt，包括选择题、确认、文本输入、未来的报告 OCR 审核。
-- 后端可以从普通 HTTP 过渡到 SSE streaming，不推翻协议。
+- 后端以 SSE streaming 为主要实时路径，普通 HTTP 仍返回最终 `AgentRunResult`，但非流式路径不再承载完整过程事件。
 - LangGraph 使用官方 persistence/checkpointer 负责执行恢复，Memomed 自建事件表负责产品历史。
 
 非目标：
@@ -63,7 +65,8 @@ conversation_id == LangGraph thread_id
 | `work_item_id` | Memomed 展示层 | 一个可折叠的 Agent 工作单元，类似 Codex 的 typed item。 |
 | `work_item_type` | Memomed 展示层 | 工作单元类型，例如 `subject_resolution`、`report_ingestion`、`evidence_retrieval`。 |
 | `event_id` | Memomed 事件层 | 前端去重、更新、折叠展示的稳定事件 ID。 |
-| `seq` | Memomed 事件层 | 同一 conversation 内事件顺序，保证重放顺序稳定。 |
+| `ordinal` | Memomed run 内顺序 | 一次 run 内的 1-based 连续顺序。实时 SSE 先用它排序。 |
+| `seq` | Memomed 会话内顺序 | 落库后分配的同一 conversation 内严格递增顺序，历史回放用它排序。实时事件在落库前 `seq=null`。 |
 
 当前阶段可以让：
 
@@ -121,7 +124,7 @@ flowchart TD
     U["用户 / 前端"] --> API["Memomed API"]
     API --> ES["Memomed Event Store<br/>mm_agent_* 表"]
     API --> LG["LangGraph Runtime"]
-    LG --> CP["LangGraph Checkpointer<br/>PostgresSaver"]
+    LG --> CP["LangGraph Checkpointer<br/>当前 InMemorySaver<br/>目标 PostgresSaver"]
     LG --> TOOLS["Tools / HITL / DB"]
     TOOLS --> LG
     LG --> API
@@ -135,12 +138,70 @@ flowchart TD
 
 - 前端只消费 Memomed Event Protocol，不直接消费 LangGraph checkpoint。
 - LangGraph 的 `thread_id` 使用 `conversation_id`。
-- 每次用户发送消息或完成 interrupt 都创建一个新的 `run_id`。
+- 每次用户发送消息或完成 interrupt 都创建一个新的 `run_id`，当前实现为 `run_{uuid4().hex}`，不靠 UUID 字符串排序。
 - `run_id` 是执行边界，`work_item_id` 是本次执行内的 UI 折叠边界。
-- 一个 `work_item_id` 默认只属于一个 `run_id`。即使两次 run 都在做“确认健康档案对象”，前端也应该展示为两段独立过程，而不是永久续写同一个折叠块。
-- 后端把 LangGraph streaming chunk 转换成 Memomed 标准事件。
-- 前端按 `event_id` upsert，按 `seq` 排序，不按纯文本 append。
-- 前端在同一 run 内按 `work_item_id` 聚合过程卡片，不跨 run 合并过程卡片。
+- 后端把 LangGraph `custom/messages/updates` stream chunk 转换成 Memomed 标准 `AgentEvent`。
+- 实时发给前端的结构事件和最终 `run_result.events` 里的结构事件来自同一个 `AgentEventStreamBuffer`，不是实时一套、最终再从 state 重建一套。
+- 前端按 `event_id` upsert；有 `seq` 时按 `seq` 排序，没有 `seq` 的实时事件按 `ordinal` 排序；不按纯文本 append 或内容去重。
+- 前端按 `work_item_id` 聚合过程卡片，不按标题、文本或 `run_id` 粗暴合并。
+
+### `work_item_id` 当前生成规则
+
+当前实现里，`work_item_id` 不是由标题或文本决定，而是由“会话 + run + 工作类型”稳定生成。
+
+实时 SSE 事件和最终 `run_result.events` 复用同一批结构事件，因此使用同一条规则：
+
+```python
+work_item_id = stable_token("wi", thread_id, run_id, work_item_type)
+```
+
+因此规则是：
+
+```text
+同一个 run_id + 同一个 work_item_type => 同一个 work_item_id
+不同 run_id 或不同 work_item_type => 不同 work_item_id
+```
+
+`work_item_type` 来自工具注册表中的 `ToolSpec.capability`：
+
+```text
+resolve_patient_tool      -> subject_resolution   -> 确认健康档案对象
+query_health_records_tool -> health_records_query -> 查询健康报告
+```
+
+前端只按 `work_item_id` 聚合过程卡片，不按标题、文本或 `run_id` 粗暴合并。
+
+### 为什么 resume 后会出现新的同名过程卡
+
+一次用户请求可能跨越多个执行 run：
+
+```text
+Run 1：用户说“看看笨笨”
+→ LLM 调用 resolve_patient_tool
+→ 工具需要用户确认
+→ 产生 subject_resolution work item：需要确认本次健康档案的管理对象
+
+Run 2：用户选择“笨笨（宠物）”
+→ resume 触发 continuation handler
+→ 确认对象成功
+→ 产生新的 subject_resolution work item：已确认这次管理对象是笨笨
+
+Run 2 后续：
+→ LLM 继续调用 query_health_records_tool
+→ 产生 health_records_query work item：报告查询工具尚未接入
+```
+
+所以页面上可能出现：
+
+```text
+确认健康档案对象：需要确认对象
+确认健康档案对象：已确认对象是笨笨
+查询健康报告：报告查询工具尚未接入
+```
+
+前两个标题相同，是因为它们属于同一个 `work_item_type=subject_resolution`；但它们的执行阶段不同、`work_item_id` 不同，因此当前设计故意展示为两张卡。
+
+如果未来希望把 interrupt 前后的对象确认合并成同一张卡，需要显式引入跨 run 的 work item scope，例如 pending action id 或 user turn id。这个改动会影响前端历史回放、事件顺序、pending interrupt 完成态，不能只在 UI 层按标题合并。
 
 ## 数据模型建议
 
@@ -232,6 +293,12 @@ created_at timestamptz not null
 updated_at timestamptz not null
 ```
 
+注意：数据库表没有独立 `ordinal` 列。当前实现把 run 内 `ordinal` 写入 `payload.ordinal`，从历史回放读出时再还原到 `AgentEvent.ordinal`。原因是：
+
+- `ordinal` 是 run 内顺序，只用于实时阶段和调试。
+- `seq` 是 conversation 内顺序，是历史回放和数据库唯一约束的排序事实源。
+- 落库时 `assign_conversation_seq()` 要求 `ordinal` 必须是从 1 开始连续的列表，然后按当前 conversation 的 `last_event_seq` 分配 `seq`。
+
 字段说明：
 
 | 字段 | 含义 |
@@ -262,6 +329,23 @@ updated_at timestamptz not null
 unique(conversation_id, seq)
 unique(run_id, dedupe_key) where dedupe_key is not null
 ```
+
+当前实现里，`event_id` 不再由内容生成，而是主要由 `run_id + ordinal` 生成：
+
+```python
+event_id = f"evt_{run_id}_{ordinal:04d}"
+```
+
+这意味着两次相同用户文本、两次相同工具结果、两次相同最终回答都会得到不同事件 ID，不会互相覆盖。`dedupe_key` 不是内容级去重机制，不能用来吞掉“文本相同但真实发生了两次”的事件。
+
+`seq` 分配在数据库事务内完成：
+
+1. 对 `conversation_id` 获取 Postgres transaction advisory lock。
+2. 查询已有 `mm_agent_conversations` 行并 `FOR UPDATE`。
+3. 用已有 `last_event_seq` 作为 offset，把本 run 的连续 `ordinal` 映射为会话级 `seq`。
+4. 写入 conversation、run、events 并更新 `last_event_seq`。
+
+这样可以避免同一会话多 tab / 重试 / 并发 run 同时读取到相同 `last_event_seq` 后分配出重复 `seq`。
 
 ## Work Item 设计
 
@@ -332,28 +416,37 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 | --- | --- | --- |
 | `message.user` | 用户消息 | 普通用户气泡 |
 | `message.assistant.delta` | 助手回复增量 | 流式更新助手气泡 |
+| `message.assistant.cancelled` | 已下发的临时助手 delta 被工具调用取消 | hidden，不展示为最终气泡 |
 | `message.assistant.completed` | 助手最终回复完成 | 固化助手气泡 |
+| `run.elapsed` | 当前用户回合已处理时间 | 折叠/状态行，HITL 等待期间继续增长 |
 | `process.group.started` | Agent 过程组开始 | 创建折叠过程卡片 |
-| `process.step` | 思考、计划、状态说明 | 放入过程卡片，默认折叠 |
-| `tool.call.started` | 工具调用开始 | 过程卡片内部 |
-| `tool.call.completed` | 工具调用成功 | 过程卡片内部 |
-| `tool.call.failed` | 工具调用失败 | 过程卡片内部，红色提示 |
+| `process.step` | 思考、计划、工具调用、工具结果、错误 | 放入过程卡片，默认折叠；具体类型在 `payload.step_type` |
 | `interrupt.requested` | 需要用户选择/确认/输入 | 显示交互卡片 |
 | `interrupt.resumed` | 用户已完成 interrupt | 过程卡片内部 |
-| `run.completed` | 本次 run 结束 | 通常不单独展示 |
-| `run.failed` | 本次 run 失败 | 错误提示 |
 
 第一版不建议让工具自由输出任意 UI 文案。工具应该输出结构化结果，runtime 再映射成标准事件。
+
+当前代码没有单独落库 `tool.call.started/completed/failed` event type。工具过程统一表达为：
+
+```text
+event_type = process.step
+payload.step_type = tool.started | tool.observation | tool.error | runtime.note | agent.progress
+```
+
+前端只展示白名单步骤，例如 `agent.progress`、`tool.started`、`tool.observation`、`tool.error`；`runtime.note` 默认作为内部过程隐藏或折叠处理，避免把 runtime 过渡文案当作用户正文。
 
 ## 事件 Payload 示例
 
 ### 用户消息
 
+实时 SSE 阶段 `seq` 为 `null`，最终 `run_result` 落库后同一个事件会带上会话级 `seq`。下例展示落库后的形态。
+
 ```json
 {
-  "id": "evt_001",
+  "id": "evt_run_abc_0001",
   "conversation_id": "conv_001",
-  "run_id": "run_001",
+  "run_id": "run_abc",
+  "ordinal": 1,
   "seq": 1,
   "event_type": "message.user",
   "role": "user",
@@ -368,10 +461,13 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 
 ```json
 {
-  "id": "evt_002",
+  "id": "evt_run_abc_0003",
   "conversation_id": "conv_001",
-  "run_id": "run_001",
-  "seq": 2,
+  "run_id": "run_abc",
+  "work_item_id": "wi_subject_resolution",
+  "work_item_type": "subject_resolution",
+  "ordinal": 3,
+  "seq": 3,
   "event_type": "process.group.started",
   "role": "assistant",
   "visibility": "collapsed",
@@ -390,10 +486,11 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 
 ```json
 {
-  "id": "evt_delta_001",
+  "id": "evt_7c7f_delta_1",
   "conversation_id": "conv_001",
-  "run_id": "run_001",
-  "seq": 8,
+  "run_id": "run_abc",
+  "ordinal": 8,
+  "seq": null,
   "event_type": "message.assistant.delta",
   "role": "assistant",
   "visibility": "visible",
@@ -426,26 +523,33 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 
 - 同一 `message_id` 的 delta 拼接成一条 streaming 助手气泡。
 - `delta_index` 用于同一条消息内部排序和去重。
-- `seq` 仍用于 conversation 全局事件顺序，不用于直接拼接 token。
+- `message.assistant.delta` 必须携带 `payload.message_id` 和 `payload.delta_index`；缺失时前端应直接报协议错误，不允许用 `run_id`、`event_id`、`seq` 或 `ordinal` 兜底猜测。
+- `ordinal` 用于实时阶段的 run 内顺序，`seq` 只有落库后才有。
 - `message.assistant.completed.content` 是最终权威完整文本，历史回放优先展示 completed，不需要重放 delta。
 
 ### 工具调用
 
+当前实现用 `process.step + payload.step_type` 表达工具调用，而不是 `tool.call.*` event type。
+
 ```json
 {
-  "id": "evt_003",
+  "id": "evt_run_abc_0004",
   "conversation_id": "conv_001",
-  "run_id": "run_001",
-  "seq": 3,
-  "event_type": "tool.call.started",
-  "role": "tool",
+  "run_id": "run_abc",
+  "work_item_id": "wi_subject_resolution",
+  "work_item_type": "subject_resolution",
+  "ordinal": 4,
+  "seq": 4,
+  "event_type": "process.step",
+  "role": "assistant",
   "visibility": "collapsed",
-  "parent_event_id": "evt_002",
-  "title": "调用工具",
-  "content": "正在识别这次要管理哪位成员或宠物",
+  "parent_event_id": "evt_run_abc_0003",
+  "title": "工具调用",
+  "content": "正在调用工具：确认健康档案对象。",
   "payload": {
+    "step_type": "tool.started",
     "tool_name": "resolve_patient_tool",
-    "args_summary": "用户提到了“爷爷”"
+    "phase": "started"
   }
 }
 ```
@@ -454,10 +558,13 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 
 ```json
 {
-  "id": "evt_004",
+  "id": "evt_run_abc_0009",
   "conversation_id": "conv_001",
-  "run_id": "run_001",
-  "seq": 4,
+  "run_id": "run_abc",
+  "work_item_id": "wi_subject_resolution",
+  "work_item_type": "subject_resolution",
+  "ordinal": 9,
+  "seq": 9,
   "event_type": "interrupt.requested",
   "role": "assistant",
   "visibility": "visible",
@@ -483,9 +590,10 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 ```json
 [
   {
-    "event_type": "tool.call.failed",
+    "event_type": "process.step",
     "content": "新建档案失败：该别名已经被其他成员或宠物使用。",
     "payload": {
+      "step_type": "tool.error",
       "error_code": "DUPLICATE_ALIAS",
       "tool_name": "commit_patient_selection"
     }
@@ -510,7 +618,7 @@ Run 3：用户又发起新的报告查询，再创建新的 subject_resolution w
 前端不要再简单：
 
 ```text
-setProcessEvents([...old, ...new])
+setEvents([...old, ...new])
 ```
 
 而应该使用 event reducer：
@@ -519,7 +627,8 @@ setProcessEvents([...old, ...new])
 收到 event
 → 如果 event_id 已存在，则更新原事件
 → 如果 event_id 不存在，则插入
-→ 按 seq 排序
+→ 有 seq 的历史/最终事件按 seq 排序
+→ seq 为 null 的实时事件按 ordinal 排序
 → 根据 work_item_id 组织过程组
 ```
 
@@ -528,11 +637,25 @@ setProcessEvents([...old, ...new])
 - `message.user` 显示为用户气泡。
 - `message.assistant.*` 显示为助手气泡，delta 期间流式更新。
 - `process.group.started` 显示为“Agent 过程”折叠卡片。
-- `tool.*` 和 `process.step` 默认放在折叠卡片内部。
+- `process.step` 默认放在折叠卡片内部，具体展示由 `payload.step_type` 决定。
 - 多个 `process.group.started` 如果拥有同一个 `work_item_id`，前端只展示一个折叠块。
-- `tool.call.failed` 即使在折叠卡片内，也要在卡片摘要中体现。
+- `payload.step_type=tool.error` 即使在折叠卡片内，也要在卡片摘要中体现。
 - `interrupt.requested` 显示为显式交互卡片，不要藏在过程卡片里。
 - 历史会话回放时，默认折叠过程卡片，只展示最终用户消息、助手回复和未完成 interrupt。
+- optimistic UI 只在渲染层临时合成，不写入真实 `events` 数组，不参与 event timeline 的去重和排序。
+
+### 前端事件层已完成优化项
+
+截至 2026-05-26，前端事件层与本文协议保持以下约束：
+
+| 优化项 | 当前状态 | 文档/代码约束 |
+| --- | --- | --- |
+| 清理 process.step 内容级 dedupe | 已完成 | 相同文本但不同 `event.id` 的 `process.step` 必须保留；不能用文本去重掩盖重复真实事件。 |
+| 清理 final 过程组按 `work_item_type` 误删 streaming 过程组 | 已完成 | 过程块只按 `work_item_id` 聚合；不同 `work_item_id` 即使同标题、同 `work_item_type` 也不能互相删除。 |
+| optimistic UI 不再伪造小数 `seq` | 已完成 | optimistic 事件只在渲染层由 `optimisticTimelineUi.ts` 合成，`seq=null`，不写入真实 timeline。 |
+| 排序语义集中 | 已完成 | 排序 helper 在 `agentEventOrder.ts`；历史/最终事件按 `seq`，实时未落库事件按 `ordinal`。 |
+| delta 协议字段不兜底 | 已完成 | `message.assistant.delta` 缺 `payload.message_id` 或 `payload.delta_index` 时是协议错误，前端不能猜。 |
+| 替换 `InMemorySaver` | 未完成 | 这是已知延后项；当前仍为 `InMemorySaver`，跨进程恢复 HITL 需要后续替换为 `PostgresSaver` 或等价持久化 checkpointer。 |
 
 ## 后端 API 设计
 
@@ -601,14 +724,26 @@ POST /api/agent/conversations/{conversation_id}/runs/stream
 
 ```text
 event: agent_event
-data: {"id":"evt_001","event_type":"message.user",...}
+data: {"id":"evt_run_abc_0001","ordinal":1,"seq":null,"event_type":"message.user",...}
 
 event: agent_event
-data: {"id":"evt_002","event_type":"process.group.started",...}
+data: {"id":"evt_run_abc_0003","ordinal":3,"seq":null,"event_type":"process.group.started",...}
 
 event: agent_event
-data: {"id":"evt_004","event_type":"interrupt.requested",...}
+data: {"id":"evt_run_abc_0009","ordinal":9,"seq":null,"event_type":"interrupt.requested",...}
 ```
+
+随后同一个 SSE 连接会返回：
+
+```text
+event: run_result
+data: {"events":[{"id":"evt_run_abc_0001","ordinal":1,"seq":101,...}, ...]}
+
+event: done
+data: {"thread_id":"conv_001","status":"interrupted"}
+```
+
+重要：路由层不再给实时事件做 `seq offset`。实时 `agent_event.seq` 保持 `null`；落库后的 `run_result.events[*].seq` 由数据库事务分配。前端通过同 ID upsert，把实时事件更新成带 `seq` 的最终事件。
 
 ### 恢复 interrupt
 
@@ -668,13 +803,40 @@ graph.astream(
 PostgresSaver
 ```
 
-本地开发可以继续使用：
+当前代码仍使用：
 
 ```text
-InMemorySaver 或 SqliteSaver
+InMemorySaver
 ```
 
-但只要需要页面刷新后继续 interrupt，就不能依赖 `InMemorySaver`。
+这意味着产品事件表可以恢复 UI 历史，但 backend 进程重启后，LangGraph pending interrupt 的执行状态仍可能丢失。`InMemorySaver` 是已知待替换项，暂时按“最后替换”处理；只要要求跨进程/重启后继续 interrupt，就必须升级到 `PostgresSaver` 或等价持久化 checkpointer。
+
+### 当前事件生成链路
+
+当前实现的核心是“纯 AgentEvent emitter”方向：
+
+```text
+stream_start_chat / stream_resume_chat
+→ 创建 run_id 和 AgentEventEmitter
+→ 立即 emit message.user、run.elapsed、初始 agent_progress
+→ LangGraph astream(custom/messages/updates)
+→ custom: 工具/节点内部过程事件，经 emitter 转成 AgentEvent 并放入 AgentEventStreamBuffer
+→ messages: 助手 delta，仅实时展示，不进入最终历史
+→ updates: graph state 只用于判断 interrupt / final_answer，不再读取 process_events
+→ final _to_run_result(... emitted_events=buffer.events())
+→ persist_run_result 分配 seq 并落库
+→ SSE run_result 返回同 ID、带 seq 的最终事件
+```
+
+已经删除的旧逻辑：
+
+- `AgentState.process_events`
+- `AgentRunResult.process_events`
+- 从 graph state 里的 `process_events` 重建最终过程卡片
+- 路由层读取 `last_event_seq` 给实时 SSE 做 offset
+- 前端按内容 dedupe 过程事件
+
+graph 内部 `_emit_process_step()` 仍然写 LangGraph custom stream dict，这是 LangGraph 与 runtime 的边界格式；它不进入 AgentState，也不作为 API 字段暴露。真正对外的产品事件只在 runtime emitter 中生成。
 
 ### 结构化 Agent State 与通用 Tool Loop
 
@@ -776,24 +938,25 @@ query_health_records_tool 返回 capability_missing
 
 ## 避免重复过程消息的规则
 
-当前重复的根因是：后端每次返回一批普通 JSON，前端直接 append；而 process event 没有稳定 ID，也没有区分“历史已有事件”和“本次新增事件”。
+历史上重复的根因是：后端每次返回一批普通 JSON，前端直接 append；而 process event 没有稳定 ID，也没有区分“历史已有事件”和“本次新增事件”。
 
-新协议用三层规则避免：
+当前实现用以下规则避免：
 
 ### 后端规则
 
-- 每个事件生成稳定 `event_id`。
-- 每个 conversation 内 `seq` 单调递增。
-- 同一 run 内同一语义步骤使用 `dedupe_key`。
-- 同一 run 内的同一用户可理解工作阶段使用同一个 `work_item_id`；不同 run 不复用 `work_item_id`。
+- 每个事件 ID 由 `run_id + ordinal` 生成，不由内容生成。
+- 每个 run 内 `ordinal` 从 1 开始连续递增。
+- 实时结构事件进入 `AgentEventStreamBuffer`，最终 result 复用同一批事件 ID。
+- 每个 conversation 内落库 `seq` 单调递增，由数据库事务分配。
+- 同一 run 内同一用户可理解工作阶段使用同一个 `work_item_id`；不同 run 默认不复用 `work_item_id`。
 - API 返回“本次新产生事件”或 SSE 实时事件，不重复返回历史事件。
 - 如果返回历史事件，必须通过 `GET /events` 明确回放。
 
 ### 前端规则
 
 - 按 `event_id` upsert，不做无脑 append。
-- 按 `seq` 排序。
-- 在同一 run 内按 `work_item_id` 聚合过程卡片，不把不同 run 的同类过程合并成一个卡片。
+- 有 `seq` 按 `seq` 排序；无 `seq` 的实时事件按 `ordinal` 排序。
+- 按 `work_item_id` 聚合过程卡片，不把不同 work item 的同类过程合并成一个卡片。
 - 同一个 `interrupt.requested` 如果还是 `pending`，只展示一张卡片。
 - `status` 从 `streaming` 变成 `completed` 时更新原事件，不新增一个看起来相同的事件。
 
@@ -801,7 +964,7 @@ query_health_records_tool 返回 capability_missing
 
 - `process.step` 描述过程，避免每一步都说同一句“需要确认对象”。
 - `interrupt.requested` 描述用户要做什么。
-- `tool.call.completed` 描述工具做成了什么。
+- `process.step[payload.step_type=tool.observation]` 描述工具做成了什么。
 - 最终助手回复只面向用户总结，不重复内部过程流水账。
 
 ## 和 Codex 交互体验的对应关系
@@ -831,7 +994,7 @@ Memomed 不需要完全复制 Codex 的实现，但可以学习它的体验原�
 ### 阶段 1：事件模型和非流式兼容
 
 - 新建 `mm_agent_conversations`、`mm_agent_runs`、`mm_agent_events`。
-- 当前 `/chat` 和 `/resume` 仍可保留普通 JSON。
+- 当前 `/chat` 和 `/resume` 仍保留普通 JSON。
 - 但返回值改成标准 `events`。
 - 前端改成 event reducer，通过 `event_id` 去重。
 - 解决重复过程消息。
@@ -839,10 +1002,10 @@ Memomed 不需要完全复制 Codex 的实现，但可以学习它的体验原�
 当前落地状态：
 
 - 已创建 `mm_agent_conversations`、`mm_agent_runs`、`mm_agent_events`，并通过迁移补充 `turn_id`、`work_item_id`、`work_item_type`。
-- 已让 `/chat` 和 `/resume` 返回标准 `events`，前端以 `event_id` upsert 并按 `seq` 排序。
-- 已让同一个 run 内的用户可理解工作阶段通过 `work_item_id` 聚合为一个折叠块；不同 run 的对象确认会显示为各自独立的“确认健康档案对象”过程。
+- 已让 `/chat` 和 `/resume` 返回标准 `events`，但非流式路径无法获得 LangGraph custom stream，因此不再承诺完整过程事件；完整过程时间线以 SSE 路径为准。
+- 已让同一个 run 内的用户可理解工作阶段通过 `work_item_id` 聚合为一个折叠块；不同 run 的对象确认默认显示为各自独立的“确认健康档案对象”过程。
 - 已在 resume 时写入 `interrupt.resumed` 事件，并将旧的 pending `interrupt.requested` 标记为 `completed`，避免历史回放时旧确认卡片再次出现。
-- 当前 `work_item_type` 只对已实现的对象识别链路落为 `subject_resolution`；后续新增报告入库、健康问答等工具时，再把各自 runtime 事件映射为 `report_ingestion`、`evidence_retrieval` 等类型。
+- 当前 `work_item_type` 来自 tool registry 的 capability，例如 `subject_resolution`、`health_records_query`；通用 runtime 不再硬编码单个工具的标题映射。
 
 ### 阶段 2：SSE streaming
 
@@ -860,16 +1023,16 @@ Memomed 不需要完全复制 Codex 的实现，但可以学习它的体验原�
   - `run_result`：本次执行的最终 `AgentRunResult`，用于同步最终状态和 `interrupt`。
   - `done`：流结束标记。
 - 前端已通过 `fetch` + `ReadableStream` 消费 SSE，因为标准 `EventSource` 不支持 POST body。
-- 前端收到 `agent_event` 后立即走同一个 reducer：按 `event_id` upsert，按 `seq` 排序。
+- 前端收到 `agent_event` 后立即走同一个 reducer：按 `event_id` upsert，实时阶段按 `ordinal` 排序；收到 `run_result` 或历史事件后，用同 ID 回填 `seq` 并按 `seq` 稳定排序。
 
 当前阶段 2 已升级为 LangGraph 真流式：
 
 - streaming endpoint 使用 `graph.astream(..., stream_mode=["updates", "messages", "custom"])`。
-- `updates` 负责把节点完成后的 graph state 转换成稳定的 Memomed `AgentEvent`。
+- `updates` 只负责累积 graph state、发现 interrupt/final_answer 等状态变化；过程事件不再从 state 的 `process_events` 重建。
 - `messages` 负责把最终助手回复转换成 `message.assistant.delta`，支持前端 token/小片段级流式展示。
 - `custom` 负责工具或节点内部的即时过程事件，例如“开始调用工具”“工具返回”“正在处理用户确认结果”。
 - 后端不再只依赖节点结束后的 `updates`，而是在工具执行内部用 LangGraph `get_stream_writer()` 主动写出过程事件。
-- runtime 会把 `custom` 事件立即转成 `process.group.started` / `process.step` 发给前端，同时保证流式下发的 `seq` 单调递增。
+- runtime 会把 `custom` 事件立即转成 `process.group.started` / `process.step` 发给前端，同时保证流式下发的 `ordinal` 单调递增。
 - streaming runtime 会避免把 `continue_pending_action` 的工具结果提前当成最终助手回复；只有 `final_answer` 节点产出的文本才会形成最终助手消息。
 - SSE 响应头包含 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，避免代理层把流式事件缓存成批量返回。
 
@@ -878,8 +1041,9 @@ Memomed 不需要完全复制 Codex 的实现，但可以学习它的体验原�
 - 过程事件不是最终回答。`process.step` 进入折叠过程卡片，`message.assistant.delta/completed` 才进入助手气泡。
 - 工具内部可以产生多个 `custom` 过程事件，但前端仍按 `work_item_id` 聚合成一个用户可理解的折叠块。
 - `run_result` 只是本次执行最终同步包，前端实时渲染不能等它回来后再一次性 append。
+- `run_result.events` 不是另一套重新构建的过程历史，而是实时结构事件 buffer 加上用户消息、耗时、最终 assistant message 后的最终结果。
 - 如果同一个 `process.group.started` 后续从 `streaming` 更新为 `completed`，前端按同一个 `event_id` upsert，不新增第二个折叠块。
-- 实时 SSE 和历史回放必须走同一个前端事件归一化函数。历史加载不能直接 `setEvents(history.events)`，否则会绕过 `runtime.note` 隐藏、过程去重、delta 合并等规则，导致刷新前后展示不一致。
+- 实时 SSE、最终 `run_result` 和历史回放必须走同一个前端事件归一化函数。历史加载不能直接绕过 reducer，否则会绕过 `runtime.note` 隐藏、delta 合并、work item 聚合等规则，导致刷新前后展示不一致。
 
 ### 前端消息渲染
 

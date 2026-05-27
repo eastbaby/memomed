@@ -12,7 +12,7 @@ from app.agent.api.schemas import (
     EventHistoryResponse,
     ResumeRequest,
 )
-from app.agent.events.service import apply_conversation_seq_offset, get_last_event_seq, list_conversations, list_events
+from app.agent.events.service import list_conversations, list_events
 from app.agent.runtime import resume_chat, start_chat, stream_resume_chat, stream_start_chat
 
 
@@ -39,16 +39,12 @@ async def resume(request: ResumeRequest) -> AgentRunResult:
 async def chat_stream(conversation_id: str, request: ChatRequest) -> StreamingResponse:
     async def generate() -> AsyncIterator[str]:
         try:
-            seq_offset = await get_last_event_seq(conversation_id)
             async for packet in stream_start_chat(ChatRequest(thread_id=conversation_id, message=request.message)):
                 if packet.event:
-                    event = packet.event.model_copy(deep=True)
-                    event.seq = seq_offset + event.seq
-                    yield _sse_event("agent_event", event.model_dump(mode="json"))
+                    yield _sse_event("agent_event", packet.event.model_dump(mode="json"))
                 if packet.result:
-                    stream_result = apply_conversation_seq_offset(packet.result, seq_offset=seq_offset)
-                    yield _sse_event("run_result", stream_result.model_dump(mode="json"))
-                    yield _sse_event("done", {"thread_id": stream_result.thread_id, "status": stream_result.status})
+                    yield _sse_event("run_result", packet.result.model_dump(mode="json"))
+                    yield _sse_event("done", {"thread_id": packet.result.thread_id, "status": packet.result.status})
         except Exception as exc:
             yield _sse_event("error", {"message": str(exc)})
 
@@ -59,16 +55,12 @@ async def chat_stream(conversation_id: str, request: ChatRequest) -> StreamingRe
 async def resume_stream(conversation_id: str, request: ResumeRequest) -> StreamingResponse:
     async def generate() -> AsyncIterator[str]:
         try:
-            seq_offset = await get_last_event_seq(conversation_id)
             async for packet in stream_resume_chat(ResumeRequest(thread_id=conversation_id, decision=request.decision)):
                 if packet.event:
-                    event = packet.event.model_copy(deep=True)
-                    event.seq = seq_offset + event.seq
-                    yield _sse_event("agent_event", event.model_dump(mode="json"))
+                    yield _sse_event("agent_event", packet.event.model_dump(mode="json"))
                 if packet.result:
-                    stream_result = apply_conversation_seq_offset(packet.result, seq_offset=seq_offset)
-                    yield _sse_event("run_result", stream_result.model_dump(mode="json"))
-                    yield _sse_event("done", {"thread_id": stream_result.thread_id, "status": stream_result.status})
+                    yield _sse_event("run_result", packet.result.model_dump(mode="json"))
+                    yield _sse_event("done", {"thread_id": packet.result.thread_id, "status": packet.result.status})
         except Exception as exc:
             yield _sse_event("error", {"message": str(exc)})
 

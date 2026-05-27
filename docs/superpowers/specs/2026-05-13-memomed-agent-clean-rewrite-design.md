@@ -2,6 +2,8 @@
 
 日期：2026-05-13
 
+> 历史方案说明：本文记录 2026-05-13 的 V1 初版设计，不代表 2026-05-25 当前实现。当前事件协议已经删除 `AgentState.process_events` 和 `AgentRunResult.process_events` 中间层；实时 SSE 和最终 `run_result.events` 共用 `AgentEvent` emitter buffer。最新事实源见 `2026-05-17-memomed-agent-event-protocol.md`。
+
 ## 背景
 
 Memomed 第一版要先跑通一个类似 Codex 的 Agent 聊天体验：

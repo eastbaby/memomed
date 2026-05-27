@@ -6,7 +6,6 @@ from typing_extensions import TypedDict
 
 class AgentState(TypedDict, total=False):
     messages: Annotated[list, operator.add]
-    process_events: Annotated[list[dict[str, Any]], operator.add]
     tool_observations: Annotated[list[dict[str, Any]], operator.add]
     pending_action: dict[str, Any] | None
     interaction: dict[str, Any] | None

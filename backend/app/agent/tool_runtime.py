@@ -10,6 +10,7 @@ class ToolSpec:
     display_name: str
     capability: str
     reuse_when_satisfied: bool = False
+    context_requirements: tuple[str, ...] = ()
 
 
 async def execute_tool_call(
@@ -28,7 +29,40 @@ async def execute_tool_call(
     if spec and _already_satisfied(spec, state, tool_call.get("args") or {}):
         return _already_satisfied_result(spec, state)
 
-    return await tool.ainvoke(tool_call.get("args") or {})
+    args = _args_with_context(tool_call.get("args") or {}, state, spec)
+    return await tool.ainvoke(args)
+
+
+def _args_with_context(args: dict[str, Any], state: dict[str, Any], spec: ToolSpec | None) -> dict[str, Any]:
+    enriched = dict(args)
+    if not spec:
+        return enriched
+    for requirement in spec.context_requirements:
+        if enriched.get(requirement):
+            continue
+        value = _resolve_context_requirement(requirement, state)
+        if value is not None:
+            enriched[requirement] = value
+    return enriched
+
+
+def _resolve_context_requirement(requirement: str, state: dict[str, Any]) -> Any:
+    if requirement == "subject_id":
+        return _resolved_subject_id(state)
+    return None
+
+
+def _resolved_subject_id(state: dict[str, Any]) -> str | None:
+    subject = (state.get("agent_context") or {}).get("subject")
+    if isinstance(subject, dict) and subject.get("subject_id"):
+        return str(subject["subject_id"])
+
+    subject_resolution = (state.get("satisfied_capabilities") or {}).get("subject_resolution") or {}
+    data = subject_resolution.get("data") if isinstance(subject_resolution, dict) else None
+    patient = data.get("patient") if isinstance(data, dict) else None
+    if isinstance(patient, dict) and patient.get("subject_id"):
+        return str(patient["subject_id"])
+    return None
 
 
 def _already_satisfied(spec: ToolSpec, state: dict[str, Any], args: dict[str, Any]) -> bool:

@@ -1,16 +1,58 @@
+import { useState } from 'react'
 import { Bot, User } from 'lucide-react'
+import { buildProcessWorkItems } from '@/lib/processWorkItems'
+import { timelineEventsWithOptimisticUi, type OptimisticTimelineUi } from '@/lib/optimisticTimelineUi'
 import type { AgentEvent } from '@/types/agent'
+import { ElapsedStatus } from './ElapsedStatus'
 import { MarkdownMessage } from './MarkdownMessage'
 import { ProcessEventCard } from './ProcessEventCard'
 
-export function ChatTimeline({ events }: { events: AgentEvent[] }) {
-  const workItemGroups = groupWorkItemEvents(events)
+export function ChatTimeline({
+  events,
+  optimisticUi = null,
+  runningElapsedSeconds = null,
+}: {
+  events: AgentEvent[]
+  optimisticUi?: OptimisticTimelineUi | null
+  runningElapsedSeconds?: number | null
+}) {
+  const [collapsedProcessAnchors, setCollapsedProcessAnchors] = useState<Set<string>>(() => new Set())
+  const displayEvents = timelineEventsWithOptimisticUi(events, optimisticUi)
+  const workItemGroups = buildProcessWorkItems(displayEvents)
+  const runningStatusAnchorId = runningElapsedSeconds === null ? null : latestUserEventId(displayEvents)
+
+  function toggleProcessAnchor(anchorId: string) {
+    setCollapsedProcessAnchors((current) => {
+      const next = new Set(current)
+      if (next.has(anchorId)) {
+        next.delete(anchorId)
+      } else {
+        next.add(anchorId)
+      }
+      return next
+    })
+  }
 
   return (
     <div className="space-y-5">
-      {events.map((event) => {
+      {displayEvents.map((event, index) => {
         if (event.event_type === 'message.user') {
-          return <MessageBubble key={event.id} role="user" content={event.content ?? ''} />
+          const elapsedEvent = elapsedEventForUserTurn(displayEvents, index)
+          const collapsed = collapsedProcessAnchors.has(event.id)
+          return (
+            <div key={event.id} className="space-y-5">
+              <MessageBubble role="user" content={event.content ?? ''} />
+              {event.id === runningStatusAnchorId && runningElapsedSeconds !== null ? (
+                <ElapsedStatus elapsedSeconds={runningElapsedSeconds} collapsed={collapsed} onToggle={() => toggleProcessAnchor(event.id)} />
+              ) : elapsedEvent ? (
+                <ElapsedStatus content={elapsedEvent.content} collapsed={collapsed} onToggle={() => toggleProcessAnchor(event.id)} />
+              ) : null}
+            </div>
+          )
+        }
+
+        if (event.event_type === 'run.elapsed') {
+          return null
         }
 
         if (event.event_type === 'message.assistant.delta' || event.event_type === 'message.assistant.completed') {
@@ -18,16 +60,45 @@ export function ChatTimeline({ events }: { events: AgentEvent[] }) {
         }
 
         if (event.event_type === 'process.group.started') {
-          const groupKey = workItemKey(event)
-          const workItem = workItemGroups.get(groupKey)
+          const workItem = [...workItemGroups.values()].find((item) => item.firstGroupId === event.id)
           if (!workItem || workItem.firstGroupId !== event.id) return null
-          return <ProcessEventCard key={groupKey} group={workItem.group} events={workItem.children} />
+          const userAnchorId = userEventIdBefore(displayEvents, index)
+          if (userAnchorId && collapsedProcessAnchors.has(userAnchorId)) return null
+          return <ProcessEventCard key={workItem.firstGroupId} group={workItem.group} events={workItem.children} />
         }
 
         return null
       })}
     </div>
   )
+}
+
+function latestUserEventId(events: AgentEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event.event_type === 'message.user') return event.id
+  }
+  return null
+}
+
+function elapsedEventForUserTurn(events: AgentEvent[], userIndex: number) {
+  let elapsedEvent: AgentEvent | null = null
+  for (let index = userIndex + 1; index < events.length; index += 1) {
+    const event = events[index]
+    if (event.event_type === 'message.user') return elapsedEvent
+    if (event.event_type === 'run.elapsed' && elapsedSecondsOf(event) >= elapsedSecondsOf(elapsedEvent)) {
+      elapsedEvent = event
+    }
+  }
+  return elapsedEvent
+}
+
+function userEventIdBefore(events: AgentEvent[], targetIndex: number) {
+  for (let index = targetIndex - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event.event_type === 'message.user') return event.id
+  }
+  return null
 }
 
 function MessageBubble({ role, content, streaming = false }: { role: 'user' | 'assistant'; content: string; streaming?: boolean }) {
@@ -43,31 +114,7 @@ function MessageBubble({ role, content, streaming = false }: { role: 'user' | 'a
   )
 }
 
-function groupWorkItemEvents(events: AgentEvent[]) {
-  const grouped = new Map<string, { firstGroupId: string; group: AgentEvent; children: AgentEvent[] }>()
-
-  for (const event of events) {
-    if (event.event_type !== 'process.group.started') continue
-    const key = workItemKey(event)
-    const current = grouped.get(key)
-    if (current) {
-      current.group = event
-      continue
-    }
-    grouped.set(key, { firstGroupId: event.id, group: event, children: [] })
-  }
-
-  for (const event of events) {
-    if (event.event_type !== 'process.step') continue
-    const key = workItemKey(event)
-    const current = grouped.get(key)
-    if (!current) continue
-    current.children.push(event)
-  }
-
-  return grouped
-}
-
-function workItemKey(event: AgentEvent) {
-  return event.work_item_id ?? event.parent_event_id ?? event.id
+function elapsedSecondsOf(event: AgentEvent | null) {
+  const value = event?.payload.elapsed_seconds
+  return typeof value === 'number' ? Math.max(0, Math.floor(value)) : 0
 }

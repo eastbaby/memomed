@@ -1,6 +1,7 @@
 import json
 from inspect import isawaitable
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,7 +17,7 @@ from app.agent.hitl.router import (
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.state import AgentState
 from app.agent.tool_runtime import execute_tool_call
-from app.agent.tools.registry import CONTINUATION_HANDLERS, TOOL_SPECS, TOOLS
+from app.agent.tools.registry import CONTINUATION_HANDLERS, TOOL_SPECS, TOOLS, continuation_capability
 from app.agent.llm import get_openai_llm_stream
 
 
@@ -69,10 +70,12 @@ async def run_tools(state: AgentState) -> dict[str, Any]:
     for tool_call in getattr(last_message, "tool_calls", []) or []:
         tool_name = tool_call.get("name")
         tool_call_id = tool_call.get("id") or tool_name or "tool_call"
+        work_item_type = _tool_work_item_type(tool_name)
         _emit_process_step(
             f"正在调用工具：{_tool_display_name(tool_name)}。",
             step_type="tool.started",
             title="工具调用",
+            work_item_type=work_item_type,
             payload={"tool_name": tool_name, "phase": "started"},
         )
         result = await execute_tool_call(
@@ -85,6 +88,7 @@ async def run_tools(state: AgentState) -> dict[str, Any]:
             _tool_result_summary(result),
             step_type=_tool_result_step_type(result),
             title=_process_event_title(_process_event_type(result)),
+            work_item_type=work_item_type,
             payload={
                 "tool_name": tool_name,
                 "phase": "completed",
@@ -115,16 +119,22 @@ def inspect_tool_result(state: AgentState) -> dict[str, Any]:
         pending_action = tool_result.get("pending_action")
         if pending_action:
             interaction["pending_action"] = pending_action
+        work_item_type = None
+        if isinstance(pending_action, dict) and (work_item_type := _continuation_capability(pending_action)):
+            pass
+        _emit_process_step(
+            tool_result.get("message", "需要用户确认。"),
+            step_type="runtime.note",
+            work_item_type=work_item_type or "tool_execution",
+        )
         return {
             "pending_action": pending_action,
             "interaction": interaction,
-            "process_events": [
-                {"step_type": "runtime.note", "text": tool_result.get("message", "需要用户确认。")}
-            ],
         }
     updates: dict[str, Any] = {
         "pending_action": None,
         "interaction": None,
+        "response": None,
     }
     if tool_observation:
         normalized_observation = _normalized_tool_observation(tool_observation)
@@ -157,6 +167,7 @@ async def continue_pending_action(state: AgentState) -> dict[str, Any]:
         "正在处理你的确认结果。",
         step_type="runtime.note",
         title="继续执行",
+        work_item_type=_continuation_capability(pending_action) or "tool_execution",
         payload={
             "phase": "resume_started",
             "continuation_tool": pending_action.get("continuation_tool"),
@@ -169,6 +180,7 @@ async def continue_pending_action(state: AgentState) -> dict[str, Any]:
             result.get("message", "还需要补充确认信息。"),
             step_type="interrupt.requested",
             title="需要补充信息",
+            work_item_type=_continuation_capability(pending_action) or "tool_execution",
             payload={"phase": "resume_needs_input"},
         )
         next_interaction = dict(result.get("interaction") or {})
@@ -182,6 +194,7 @@ async def continue_pending_action(state: AgentState) -> dict[str, Any]:
         result["message"],
         step_type=_tool_result_step_type(result),
         title=_process_event_title(_process_event_type(result)),
+        work_item_type=_continuation_capability(pending_action) or "tool_execution",
         payload={
             "phase": "resume_completed",
             "status": result.get("status"),
@@ -195,7 +208,6 @@ async def continue_pending_action(state: AgentState) -> dict[str, Any]:
         }
     )
     return {
-        "process_events": [{"step_type": _tool_result_step_type(result), "text": result["message"]}],
         "pending_action": None,
         "interaction": None,
         "response": result["message"],
@@ -208,7 +220,7 @@ async def continue_pending_action(state: AgentState) -> dict[str, Any]:
             _latest_user_message_text(state.get("messages", [])),
         ),
         "active_tool_call_count": 0,
-        "metadata": {"status": result.get("status")},
+        "metadata": _metadata_with_status(state, str(result.get("status") or "")),
     }
 
 
@@ -345,26 +357,36 @@ def _emit_process_step(
     work_item_type: str = "subject_resolution",
     payload: dict[str, Any] | None = None,
 ) -> None:
+    runtime_event_id = f"process_{uuid4().hex}"
+    event = {
+        "type": "process_step",
+        "step_type": step_type,
+        "title": title,
+        "text": text,
+        "work_item_type": work_item_type,
+        "runtime_event_id": runtime_event_id,
+        "payload": {
+            **(payload or {}),
+            "runtime_event_id": runtime_event_id,
+        },
+    }
     try:
         writer = get_stream_writer()
     except RuntimeError:
         return
-    writer(
-        {
-            "type": "process_step",
-            "step_type": step_type,
-            "title": title,
-            "text": text,
-            "work_item_type": work_item_type,
-            "payload": payload or {},
-        }
-    )
+    writer(event)
 
 
 def _tool_display_name(tool_name: str | None) -> str:
     if tool_name and tool_name in TOOL_SPECS:
         return TOOL_SPECS[tool_name].display_name
     return tool_name or "未知工具"
+
+
+def _tool_work_item_type(tool_name: str | None) -> str:
+    if tool_name and tool_name in TOOL_SPECS:
+        return TOOL_SPECS[tool_name].capability
+    return "tool_execution"
 
 
 def _tool_result_summary(result: dict[str, Any]) -> str:
@@ -378,15 +400,22 @@ def _tool_result_summary(result: dict[str, Any]) -> str:
 def final_answer(state: AgentState) -> dict[str, Any]:
     last_message = state["messages"][-1]
     if getattr(last_message, "tool_calls", None):
-        return {"response": "", "metadata": {"status": "final_answer_missing"}}
-    content = (
-        last_message.content
-        if isinstance(last_message, AIMessage)
-        else state.get("response") or "处理完成。"
-    )
+        return {"response": "", "metadata": _metadata_with_status(state, "final_answer_missing")}
+    if isinstance(last_message, AIMessage):
+        content = last_message.content
+    else:
+        content = state.get("response")
+        if not content:
+            return {"response": "", "metadata": _metadata_with_status(state, "final_answer_missing")}
     if not str(content or "").strip():
-        return {"response": "", "metadata": {"status": "llm_empty_response"}}
-    return {"response": content, "metadata": {"status": "completed"}}
+        return {"response": "", "metadata": _metadata_with_status(state, "llm_empty_response")}
+    return {"response": content, "metadata": _metadata_with_status(state, "completed")}
+
+
+def _metadata_with_status(state: AgentState, status: str) -> dict[str, Any]:
+    metadata = dict(state.get("metadata") or {})
+    metadata["status"] = status
+    return metadata
 
 
 def _tool_call_rounds_exhausted(state: AgentState) -> bool:
@@ -464,12 +493,22 @@ def _parse_tool_message_content(content: Any) -> dict[str, Any] | None:
     if isinstance(content, dict):
         return content
     if not isinstance(content, str):
-        return None
+        return _tool_message_parse_error("工具消息内容不是 JSON 字符串或对象。")
     try:
         parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError as exc:
+        return _tool_message_parse_error(f"工具消息解析失败：{exc.msg}。")
+    if not isinstance(parsed, dict):
+        return _tool_message_parse_error("工具消息解析失败：JSON 顶层不是对象。")
+    return parsed
+
+
+def _tool_message_parse_error(message: str) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "message": message,
+        "data": {},
+    }
 
 
 def _normalized_tool_observation(observation: dict[str, Any]) -> dict[str, Any]:
@@ -508,9 +547,7 @@ def _merge_agent_context(context: dict[str, Any], observation: dict[str, Any]) -
 
 
 def _continuation_capability(pending_action: dict[str, Any]) -> str | None:
-    if pending_action.get("type") in {"confirm_patient", "create_subject_name"}:
-        return "subject_resolution"
-    return None
+    return continuation_capability(pending_action.get("continuation_tool"))
 
 
 def _merge_satisfied_capabilities(
@@ -551,6 +588,7 @@ graph = (
         {
             "human_interrupt": "human_interrupt",
             "call_model": "call_model",
+            "final_answer": "final_answer",
         },
     )
     .add_conditional_edges(

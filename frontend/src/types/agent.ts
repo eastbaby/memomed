@@ -33,7 +33,8 @@ export type AgentEvent = {
   run_id?: string | null
   work_item_id?: string | null
   work_item_type?: string | null
-  seq: number
+  ordinal: number
+  seq: number | null
   event_type: string
   role?: 'user' | 'assistant' | 'tool' | 'system' | null
   visibility: 'visible' | 'collapsed' | 'debug' | 'hidden'
@@ -45,17 +46,11 @@ export type AgentEvent = {
   payload: Record<string, unknown>
 }
 
-export type ProcessEvent = {
-  step_type: string
-  text: string
-}
-
 export type AgentRunResult = {
   thread_id: string
   status: AgentStatus
   events: AgentEvent[]
   messages: AgentMessage[]
-  process_events: ProcessEvent[]
   interrupt: InteractionRequest | null
   error?: string | null
 }

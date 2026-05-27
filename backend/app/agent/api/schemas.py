@@ -29,7 +29,8 @@ class AgentEvent(BaseModel):
     run_id: str | None = None
     work_item_id: str | None = None
     work_item_type: str | None = None
-    seq: int
+    ordinal: int
+    seq: int | None = None
     event_type: str
     role: Literal["user", "assistant", "tool", "system"] | None = None
     visibility: Literal["visible", "collapsed", "debug", "hidden"] = "visible"
@@ -46,7 +47,6 @@ class AgentRunResult(BaseModel):
     status: Literal["completed", "interrupted", "error"]
     events: list[AgentEvent] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
-    process_events: list[dict[str, Any]] = Field(default_factory=list)
     interrupt: InteractionRequest | None = None
     error: str | None = None
 

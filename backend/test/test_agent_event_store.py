@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.agent.api.schemas import AgentEvent, AgentRunResult, ChatMessage
 from app.agent.events.service import (
-    apply_conversation_seq_offset,
+    assign_conversation_seq,
+    _conversation_for_update_statement,
+    _conversation_seq_lock_statement,
     _event_model,
     _pending_interrupt_completion_statement,
     _run_status_from_result,
@@ -19,6 +21,7 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
                 id="evt_user",
                 conversation_id="thread-1",
                 run_id="run-1",
+                ordinal=1,
                 seq=1,
                 event_type="message.user",
                 role="user",
@@ -31,22 +34,24 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
     def test_title_falls_back_to_new_conversation(self) -> None:
         self.assertEqual(_title_from_events([]), "新的健康咨询")
 
-    def test_event_model_offsets_seq_for_conversation_timeline(self) -> None:
+    def test_event_model_uses_allocated_conversation_seq(self) -> None:
         event = AgentEvent(
             id="evt_answer",
             conversation_id="thread-1",
             run_id="run-1",
-            seq=2,
+            ordinal=2,
+            seq=7,
             event_type="message.assistant.completed",
             role="assistant",
             content="处理完成",
         )
 
-        row = _event_model(event, "thread-1", "run-1", "default", seq_offset=5)
+        row = _event_model(event, "thread-1", "run-1", "default")
 
         self.assertEqual(row.seq, 7)
+        self.assertEqual(row.payload["ordinal"], 2)
 
-    def test_apply_conversation_seq_offset_updates_events_for_streaming_client(self) -> None:
+    async def test_persist_run_result_returns_events_with_allocated_conversation_seq(self) -> None:
         result = AgentRunResult(
             thread_id="thread-1",
             status="completed",
@@ -55,7 +60,8 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
                     id="evt_user",
                     conversation_id="thread-1",
                     run_id="run-1",
-                    seq=1,
+                    ordinal=1,
+                    seq=None,
                     event_type="message.user",
                     role="user",
                     content="新消息",
@@ -64,18 +70,46 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
                     id="evt_answer",
                     conversation_id="thread-1",
                     run_id="run-1",
-                    seq=2,
+                    ordinal=2,
+                    seq=None,
                     event_type="message.assistant.completed",
                     role="assistant",
                     content="新回答",
                 ),
             ],
         )
+        session = AsyncMock()
+        locked_conversation = type("Conversation", (), {"last_event_seq": 8, "title": "旧标题"})()
+        lock_result = MagicMock()
+        lock_result.scalar_one_or_none.return_value = locked_conversation
+        session.execute = AsyncMock(return_value=lock_result)
+        session.merge = AsyncMock()
+        session.commit = AsyncMock()
+        context_manager = MagicMock()
+        context_manager.__aenter__ = AsyncMock(return_value=session)
+        context_manager.__aexit__ = AsyncMock(return_value=None)
 
-        shifted = apply_conversation_seq_offset(result, seq_offset=8)
+        with patch("app.agent.events.service.AsyncSessionLocal", return_value=context_manager):
+            persisted = await persist_run_result(result, trigger_type="user_message")
 
-        self.assertEqual([event.seq for event in shifted.events], [9, 10])
-        self.assertEqual([event.seq for event in result.events], [1, 2])
+        self.assertEqual([event.seq for event in persisted.events], [9, 10])
+        self.assertEqual([event.seq for event in result.events], [None, None])
+
+    def test_conversation_seq_allocation_locks_conversation_row(self) -> None:
+        statement = _conversation_for_update_statement("thread-1")
+        compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+
+        self.assertIn("FROM mm_agent_conversations", compiled)
+        self.assertIn("id = 'thread-1'", compiled)
+        self.assertIn("FOR UPDATE", compiled)
+
+    def test_conversation_seq_allocation_uses_transaction_advisory_lock(self) -> None:
+        statement = _conversation_seq_lock_statement("thread-1")
+        compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+
+        self.assertIn("pg_advisory_xact_lock", compiled)
+        self.assertIn("hashtext", compiled)
+        self.assertIn("'thread-1'", compiled)
 
     def test_pending_interrupt_completion_statement_targets_only_pending_interrupts(self) -> None:
         statement = _pending_interrupt_completion_statement("thread-1", "default")
@@ -103,7 +137,8 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
                     id="evt_user",
                     conversation_id="thread-1",
                     run_id="run-1",
-                    seq=1,
+                    ordinal=1,
+                    seq=None,
                     event_type="message.user",
                     role="user",
                     content="帮我老公存报告",
@@ -112,7 +147,8 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
                     id="evt_answer",
                     conversation_id="thread-1",
                     run_id="run-1",
-                    seq=2,
+                    ordinal=2,
+                    seq=None,
                     event_type="message.assistant.completed",
                     role="assistant",
                     content="处理完成",
@@ -120,9 +156,10 @@ class AgentEventStoreTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         session = AsyncMock()
-        session.get = AsyncMock(return_value=None)
+        lock_result = MagicMock()
+        lock_result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=lock_result)
         session.merge = AsyncMock()
-        session.execute = AsyncMock()
         session.commit = AsyncMock()
         context_manager = MagicMock()
         context_manager.__aenter__ = AsyncMock(return_value=session)

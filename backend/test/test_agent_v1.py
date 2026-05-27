@@ -4,15 +4,16 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.types import Command
 
-from app.agent.api.schemas import ChatRequest
+from app.agent.api.schemas import AgentEvent, AgentRunResult, ChatRequest
 from app.agent.graph import graph
 from app.agent.hitl.schemas import InteractionRequest, SelectOption
 from app.agent.runtime import _to_run_result, start_chat, stream_start_chat
-from app.agent.api.routes import _sse_event, _stream_headers
+from app.agent.api.routes import _sse_event, _stream_headers, chat_stream
 from app.agent.tools.patient import (
     PatientGrounding,
     SubjectCandidate,
     _selection_options,
+    classify_patient_grounding,
     commit_patient_selection,
     resolve_patient_tool,
 )
@@ -213,20 +214,58 @@ class PatientToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "not_applicable")
         self.assertIn("手机", result["data"]["reason"])
 
+    async def test_classify_patient_grounding_logs_structured_output_failure(self) -> None:
+        class FakeLLM:
+            def with_structured_output(self, schema):
+                return self
+
+            async def ainvoke(self, messages):
+                raise ValueError("bad structured output")
+
+        with (
+            patch("app.agent.tools.patient.get_openai_llm_non_stream", return_value=FakeLLM()),
+            self.assertLogs("app.agent.tools.patient", level="WARNING") as logs,
+        ):
+            result = await classify_patient_grounding("帮家人存报告", [])
+
+        self.assertEqual(result.resolution_status, "ambiguous")
+        self.assertTrue(any("patient grounding classifier failed" in message for message in logs.output))
+
     async def test_commit_patient_selection_returns_success_observation(self) -> None:
         result = await commit_patient_selection(
             pending_action={
                 "id": "pa_001",
                 "type": "confirm_patient",
                 "continuation_tool": "commit_patient_selection",
-                "candidate_payload": {"original_text": "帮家人存一下这个报告"},
+                "candidate_payload": {
+                    "original_text": "帮家人存一下这个报告",
+                    "candidate_subject_ids": ["subject-mother"],
+                },
             },
-            user_decision={"value": "mother", "label": "妈妈"},
+            user_decision={"value": "subject:subject-mother", "label": "妈妈"},
         )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["data"]["patient"]["patient_code"], "mother")
+        self.assertEqual(result["data"]["patient"]["patient_code"], "subject-mother")
         self.assertIn("妈妈", result["message"])
+
+    async def test_commit_patient_selection_rejects_unknown_decision_value(self) -> None:
+        result = await commit_patient_selection(
+            pending_action={
+                "id": "pa_001",
+                "type": "confirm_patient",
+                "continuation_tool": "commit_patient_selection",
+                "candidate_payload": {
+                    "original_text": "帮家人存一下这个报告",
+                    "candidate_subject_ids": ["subject-mother"],
+                },
+            },
+            user_decision={"value": "subject:unknown", "label": "未知对象"},
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("无效的健康档案选择", result["message"])
+        self.assertEqual(result["data"], {})
 
     async def test_commit_patient_selection_asks_name_when_creating_pet(self) -> None:
         result = await commit_patient_selection(
@@ -659,6 +698,45 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "capability_missing")
         self.assertIn("报告查询工具尚未接入", result["message"])
 
+    async def test_tool_runtime_hydrates_declared_subject_id_context_requirement(self) -> None:
+        from app.agent.tool_runtime import execute_tool_call
+        from app.agent.tool_runtime import ToolSpec
+        from app.agent.tools.records import query_health_records_tool
+
+        result = await execute_tool_call(
+            {
+                "name": "query_health_records_tool",
+                "args": {"record_type": "physical_exam", "limit": 5},
+                "id": "call_query_without_subject",
+            },
+            {
+                "messages": [{"role": "user", "content": "查一下我妈之前的指标"}],
+                "satisfied_capabilities": {
+                    "subject_resolution": {
+                        "turn_key": "查一下我妈之前的指标",
+                        "data": {
+                            "patient": {
+                                "subject_id": "subject-mother",
+                                "display_name": "妈妈",
+                            }
+                        },
+                    }
+                },
+            },
+            tools_by_name={"query_health_records_tool": query_health_records_tool},
+            tool_specs={
+                "query_health_records_tool": ToolSpec(
+                    name="query_health_records_tool",
+                    display_name="查询健康报告",
+                    capability="custom_query_capability",
+                    context_requirements=("subject_id",),
+                )
+            },
+        )
+
+        self.assertEqual(result["status"], "capability_missing")
+        self.assertEqual(result["data"]["subject_id"], "subject-mother")
+
     async def test_call_model_retries_when_llm_outputs_fake_tool_call_text(self) -> None:
         from app.agent.graph import call_model
 
@@ -890,7 +968,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed["metadata"]["status"], "llm_empty_response")
         self.assertEqual(resumed.get("response"), "")
 
-    async def test_graph_returns_error_when_tool_chain_never_produces_final_assistant_answer(self) -> None:
+    async def test_graph_returns_terminal_message_when_query_tool_is_not_available(self) -> None:
         tool_call_response = AIMessage(
             content="",
             tool_calls=[
@@ -901,10 +979,17 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
+        final_response = AIMessage(content="抱歉，目前健康报告查询功能尚未接入，暂时无法直接查看妈妈的体检报告。")
 
         class FakeBoundLLM:
+            def __init__(self) -> None:
+                self.calls = 0
+
             async def ainvoke(self, messages):
-                return tool_call_response
+                self.calls += 1
+                if self.calls == 1:
+                    return tool_call_response
+                return final_response
 
         class FakeLLM:
             def __init__(self) -> None:
@@ -913,7 +998,9 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
             def bind_tools(self, tools):
                 return self.bound
 
-        with patch("app.agent.graph.get_openai_llm_stream", return_value=FakeLLM()):
+        fake_llm = FakeLLM()
+
+        with patch("app.agent.graph.get_openai_llm_stream", return_value=fake_llm):
             result = await graph.ainvoke(
                 {
                     "messages": [{"role": "user", "content": "查一下我妈的体检报告"}],
@@ -924,10 +1011,37 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 {"configurable": {"thread_id": "test-tool-chain-without-final-answer"}},
             )
 
-        self.assertEqual(result["metadata"]["status"], "final_answer_missing")
-        self.assertEqual(result.get("response"), "")
+        self.assertEqual(fake_llm.bound.calls, 2)
+        self.assertEqual(result["metadata"]["status"], "completed")
+        self.assertEqual(result.get("response"), "抱歉，目前健康报告查询功能尚未接入，暂时无法直接查看妈妈的体检报告。")
 
-    async def test_graph_generates_final_answer_after_capability_missing_tool_result(self) -> None:
+    def test_final_answer_returns_error_without_assistant_message_or_response(self) -> None:
+        from app.agent.graph import final_answer
+
+        result = final_answer(
+            {
+                "messages": [
+                    ToolMessage(content='{"status":"success","message":"工具完成","data":{}}', tool_call_id="call_1")
+                ]
+            }
+        )
+
+        self.assertEqual(result["metadata"]["status"], "final_answer_missing")
+        self.assertEqual(result["response"], "")
+
+    def test_invalid_tool_message_json_becomes_explicit_tool_error_observation(self) -> None:
+        from app.agent.graph import _latest_tool_observation
+
+        observation = _latest_tool_observation(
+            [ToolMessage(content="{bad json", name="broken_tool", tool_call_id="call_broken")]
+        )
+
+        self.assertIsNotNone(observation)
+        self.assertEqual(observation["tool_name"], "broken_tool")
+        self.assertEqual(observation["result"]["status"], "error")
+        self.assertIn("工具消息解析失败", observation["result"]["message"])
+
+    async def test_graph_lets_model_finish_after_capability_missing_tool_result(self) -> None:
         query_tool_call = AIMessage(
             content="",
             tool_calls=[
@@ -938,7 +1052,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
-        final_response = AIMessage(content="已确认对象是妈妈，但当前报告查询工具尚未接入。")
+        final_response = AIMessage(content="抱歉，目前健康报告查询功能尚未接入，暂时无法直接查看妈妈的体检报告。")
 
         class FakeBoundLLM:
             def __init__(self) -> None:
@@ -946,7 +1060,9 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
 
             async def ainvoke(self, messages):
                 self.calls += 1
-                return query_tool_call if self.calls == 1 else final_response
+                if self.calls == 1:
+                    return query_tool_call
+                return final_response
 
         class FakeLLM:
             def __init__(self) -> None:
@@ -970,9 +1086,9 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(fake_llm.bound.calls, 2)
         self.assertEqual(result["metadata"]["status"], "completed")
-        self.assertEqual(result["response"], "已确认对象是妈妈，但当前报告查询工具尚未接入。")
+        self.assertEqual(result["response"], "抱歉，目前健康报告查询功能尚未接入，暂时无法直接查看妈妈的体检报告。")
 
-    async def test_graph_passes_latest_tool_observation_to_llm_before_final_answer(self) -> None:
+    async def test_graph_clears_stale_response_before_continuing_after_tool_observation(self) -> None:
         query_tool_call = AIMessage(
             content="",
             tool_calls=[
@@ -983,20 +1099,17 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
-        final_response = AIMessage(content="已确认对象是妈妈，但当前报告查询工具尚未接入。")
+        final_response = AIMessage(content="目前报告查询工具尚未接入，我暂时不能直接查看妈妈的指标。")
 
         class FakeBoundLLM:
             def __init__(self) -> None:
                 self.calls = 0
-                self.seen_observation_on_second_call = False
 
             async def ainvoke(self, messages):
                 self.calls += 1
                 if self.calls == 1:
                     return query_tool_call
-                serialized = "\n".join(str(getattr(message, "content", message)) for message in messages)
-                self.seen_observation_on_second_call = "报告查询工具尚未接入" in serialized
-                return final_response if self.seen_observation_on_second_call else query_tool_call
+                return final_response
 
         class FakeLLM:
             def __init__(self) -> None:
@@ -1011,6 +1124,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
             result = await graph.ainvoke(
                 {
                     "messages": [{"role": "user", "content": "查一下我妈之前的指标"}],
+                    "response": "已确认这次管理对象是妈妈（成员）。",
                     "current_subject": {"subject_id": "subject-mother", "display_name": "妈妈", "patient_type": "human"},
                     "subject_resolution_status": "resolved",
                     "subject_resolution_turn_key": "查一下我妈之前的指标",
@@ -1018,9 +1132,9 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 {"configurable": {"thread_id": "test-latest-tool-observation-visible"}},
             )
 
-        self.assertTrue(fake_llm.bound.seen_observation_on_second_call)
+        self.assertEqual(fake_llm.bound.calls, 2)
         self.assertEqual(result["metadata"]["status"], "completed")
-        self.assertEqual(result["response"], "已确认对象是妈妈，但当前报告查询工具尚未接入。")
+        self.assertEqual(result["response"], "目前报告查询工具尚未接入，我暂时不能直接查看妈妈的指标。")
 
     async def test_graph_does_not_repeat_patient_resolution_after_user_selection(self) -> None:
         tool_call_response = AIMessage(
@@ -1077,6 +1191,24 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("__interrupt__", resumed)
         self.assertEqual(resumed["metadata"]["status"], "completed")
         self.assertEqual(resumed["response"], "已确认对象是妈妈，但当前还没有报告查询工具。")
+
+    async def test_continue_pending_action_does_not_write_process_events_to_state(self) -> None:
+        from app.agent.graph import continue_pending_action
+
+        result = await continue_pending_action(
+            {
+                "pending_action": {
+                    "id": "pa_confirm_patient",
+                    "type": "confirm_patient",
+                    "continuation_tool": "commit_patient_selection",
+                    "candidate_payload": {"candidate_subject_ids": ["subject-mother"]},
+                },
+                "user_decision": {"value": "subject:subject-mother", "label": "妈妈"},
+            }
+        )
+
+        self.assertNotIn("process_events", result)
+        self.assertEqual(result["response"], "已确认这次管理对象是妈妈。")
 
     async def test_graph_finishes_after_create_subject_name_interrupt(self) -> None:
         tool_call_response = AIMessage(
@@ -1150,26 +1282,104 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    def test_run_result_exposes_structured_events_for_user_process_and_answer(self) -> None:
+    def test_run_result_exposes_structured_events_for_user_and_answer(self) -> None:
         result = _to_run_result(
             "thread-1",
-            {
-                "response": "已确认对象是爸爸。",
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是爸爸。"}],
-            },
+            {"response": "已确认对象是爸爸。"},
             user_message="帮我爸看报告",
         )
 
         event_types = [event.event_type for event in result.events]
 
-        self.assertEqual(event_types, ["message.user", "process.group.started", "process.step", "message.assistant.completed"])
+        self.assertEqual(event_types, ["message.user", "message.assistant.completed"])
         self.assertEqual(result.events[0].content, "帮我爸看报告")
         self.assertEqual(result.events[-1].content, "已确认对象是爸爸。")
+        self.assertEqual([event.ordinal for event in result.events], [1, 2])
+        self.assertTrue(all(event.seq is None for event in result.events))
+        self.assertEqual([event.id for event in result.events], [f"evt_{result.events[0].run_id}_{index:04d}" for index in range(1, 3)])
 
-    def test_process_group_is_separate_across_interrupt_and_resume_runs(self) -> None:
+    def test_run_result_persists_elapsed_event_after_user_message(self) -> None:
+        result = _to_run_result(
+            "thread-1",
+            {"response": "已处理完成。"},
+            user_message="帮我看报告",
+            run_elapsed_seconds=102,
+        )
+
+        event_types = [event.event_type for event in result.events]
+
+        self.assertEqual(event_types[:2], ["message.user", "run.elapsed"])
+        self.assertEqual(result.events[1].content, "已处理 1m 42s")
+        self.assertEqual(result.events[1].payload["elapsed_seconds"], 102)
+
+    def test_interrupted_run_persists_elapsed_event_for_waiting_user_turn(self) -> None:
+        result = _to_run_result(
+            "thread-1",
+            {
+                "metadata": {"turn_key": "turn-abc"},
+                "__interrupt__": [
+                    type(
+                        "Interrupt",
+                        (),
+                        {
+                            "value": {
+                                "type": "select_one",
+                                "title": "这次要管理谁？",
+                                "description": "需要确认本次健康档案的管理对象。",
+                            }
+                        },
+                    )()
+                ]
+            },
+            user_message="帮我看报告",
+            run_elapsed_seconds=8,
+        )
+
+        self.assertEqual(result.status, "interrupted")
+        elapsed_events = [event for event in result.events if event.event_type == "run.elapsed"]
+        self.assertEqual(len(elapsed_events), 1)
+        self.assertEqual(elapsed_events[0].content, "已处理 8s")
+
+    def test_interrupted_and_resumed_runs_share_elapsed_event_identity_for_same_user_turn(self) -> None:
+        interrupted = _to_run_result(
+            "thread-1",
+            {
+                "metadata": {"turn_key": "turn-abc"},
+                "__interrupt__": [
+                    type(
+                        "Interrupt",
+                        (),
+                        {
+                            "value": {
+                                "type": "select_one",
+                                "title": "这次要管理谁？",
+                                "description": "需要确认本次健康档案的管理对象。",
+                            }
+                        },
+                    )()
+                ],
+            },
+            user_message="帮我看报告",
+            run_elapsed_seconds=8,
+        )
+        resumed = _to_run_result(
+            "thread-1",
+            {"metadata": {"turn_key": "turn-abc"}, "response": "已继续处理完成。"},
+            resume_decision={"value": "subject-1", "label": "妈妈"},
+            run_elapsed_seconds=18,
+        )
+
+        interrupted_elapsed = next(event for event in interrupted.events if event.event_type == "run.elapsed")
+        resumed_elapsed = next(event for event in resumed.events if event.event_type == "run.elapsed")
+
+        self.assertNotEqual(interrupted_elapsed.id, resumed_elapsed.id)
+        self.assertEqual(resumed_elapsed.content, "已处理 18s")
+
+    def test_interrupted_run_without_emitted_events_does_not_create_process_group(self) -> None:
         first = _to_run_result(
             "thread-1",
             {
+                "metadata": {"turn_key": "turn-abc"},
                 "__interrupt__": [
                     type(
                         "Interrupt",
@@ -1179,75 +1389,91 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                                 "type": "select_one",
                                 "title": "这次要管理谁或哪只宠物的健康档案？",
                                 "description": "我先把健康档案对象对齐。",
+                                "pending_action": {
+                                    "type": "confirm_patient",
+                                    "continuation_tool": "commit_patient_selection",
+                                },
                             }
                         },
                     )()
                 ],
-                "process_events": [{"step_type": "runtime.note", "text": "需要确认本次健康档案的管理对象。"}],
             },
             user_message="帮我存最近报告",
         )
-        resumed = _to_run_result(
-            "thread-1",
-            {
-                "response": "已确认对象是爸爸。",
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是爸爸。"}],
-            },
-        )
+        self.assertNotIn("process.group.started", [event.event_type for event in first.events])
+        self.assertEqual(first.status, "interrupted")
 
-        first_group = next(event for event in first.events if event.event_type == "process.group.started")
-        resumed_group = next(event for event in resumed.events if event.event_type == "process.group.started")
-
-        self.assertEqual(first_group.work_item_type, "subject_resolution")
-        self.assertNotEqual(first_group.work_item_id, resumed_group.work_item_id)
-        self.assertNotEqual(first_group.id, resumed_group.id)
-
-    def test_resume_run_records_interrupt_resumed_event_in_same_work_item(self) -> None:
+    def test_run_result_does_not_synthesize_process_groups_without_emitted_events(self) -> None:
         result = _to_run_result(
             "thread-1",
-            {
-                "response": "已确认对象是爸爸。",
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是爸爸。"}],
-            },
-            resume_decision={"type": "select_one", "value": "subject_dad"},
+            {"response": "暂时还没有接入报告查询。"},
+            user_message="查一下妈妈血常规",
         )
 
-        resumed_event = next(event for event in result.events if event.event_type == "interrupt.resumed")
-        group_event = next(event for event in result.events if event.event_type == "process.group.started")
+        groups = [event for event in result.events if event.event_type == "process.group.started"]
 
-        self.assertEqual(resumed_event.status, "completed")
-        self.assertEqual(resumed_event.work_item_type, "subject_resolution")
-        self.assertEqual(resumed_event.work_item_id, group_event.work_item_id)
-        self.assertEqual(resumed_event.payload["decision"], {"type": "select_one", "value": "subject_dad"})
+        self.assertEqual(groups, [])
 
-    def test_same_process_text_in_different_runs_creates_different_work_items(self) -> None:
+    def test_non_hitl_run_without_emitted_events_has_no_process_group(self) -> None:
         first = _to_run_result(
             "thread-1",
             {
-                "response": "已确认对象是爸爸。",
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是爸爸。"}],
+                "metadata": {"turn_key": "same-turn"},
+                "response": "暂时还没有接入报告查询。",
             },
-            run_id="run-1",
+            run_id="run-query-a",
         )
         second = _to_run_result(
             "thread-1",
             {
-                "response": "已确认对象是爸爸。",
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是爸爸。"}],
+                "metadata": {"turn_key": "same-turn"},
+                "response": "暂时还没有接入报告查询。",
             },
+            run_id="run-query-b",
+        )
+
+        self.assertNotIn("process.group.started", [event.event_type for event in first.events + second.events])
+
+    def test_completed_run_without_emitted_events_has_no_process_group(self) -> None:
+        result = _to_run_result(
+            "thread-1",
+            {"response": "工具已完成。"},
+        )
+
+        self.assertNotIn("process.group.started", [event.event_type for event in result.events])
+
+    def test_resume_run_records_interrupt_resumed_event_without_emitted_work_item(self) -> None:
+        result = _to_run_result(
+            "thread-1",
+            {"response": "已确认对象是爸爸。"},
+            resume_decision={"type": "select_one", "value": "subject_dad"},
+        )
+
+        resumed_event = next(event for event in result.events if event.event_type == "interrupt.resumed")
+        self.assertEqual(resumed_event.status, "completed")
+        self.assertIsNone(resumed_event.work_item_type)
+        self.assertIsNone(resumed_event.work_item_id)
+        self.assertEqual(resumed_event.payload["decision"], {"type": "select_one", "value": "subject_dad"})
+
+    def test_same_answer_text_in_different_runs_creates_different_event_ids(self) -> None:
+        first = _to_run_result(
+            "thread-1",
+            {"response": "已确认对象是爸爸。"},
+            run_id="run-1",
+        )
+        second = _to_run_result(
+            "thread-1",
+            {"response": "已确认对象是爸爸。"},
             run_id="run-2",
         )
 
-        first_group = next(event for event in first.events if event.event_type == "process.group.started")
-        second_group = next(event for event in second.events if event.event_type == "process.group.started")
-        first_step = next(event for event in first.events if event.event_type == "process.step")
-        second_step = next(event for event in second.events if event.event_type == "process.step")
+        first_answer = next(event for event in first.events if event.event_type == "message.assistant.completed")
+        second_answer = next(event for event in second.events if event.event_type == "message.assistant.completed")
+        self.assertNotEqual(first_answer.id, second_answer.id)
+        self.assertNotIn("process.group.started", [event.event_type for event in first.events + second.events])
+        self.assertNotIn("process.step", [event.event_type for event in first.events + second.events])
 
-        self.assertNotEqual(first_group.work_item_id, second_group.work_item_id)
-        self.assertNotEqual(first_group.id, second_group.id)
-        self.assertNotEqual(first_step.id, second_step.id)
-
-    def test_process_events_have_stable_ids_for_frontend_upsert(self) -> None:
+    def test_interrupted_result_without_emitted_events_has_no_process_steps(self) -> None:
         payload = {
             "__interrupt__": [
                 type(
@@ -1262,55 +1488,39 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     },
                 )()
             ],
-            "process_events": [
-                {"step_type": "runtime.note", "text": "需要确认本次健康档案的管理对象。"},
-                {"step_type": "runtime.note", "text": "需要确认本次健康档案的管理对象。"},
-            ],
         }
 
         result = _to_run_result("thread-1", payload)
 
-        duplicate_text_events = [
+        same_text_events = [
             event
             for event in result.events
             if event.event_type == "process.step"
             and event.content == "需要确认本次健康档案的管理对象。"
         ]
-        self.assertEqual(len(duplicate_text_events), 1)
+        self.assertEqual(same_text_events, [])
 
-    def test_completed_error_response_is_returned_as_process_event_and_message(self) -> None:
+    def test_completed_error_response_is_returned_as_message(self) -> None:
         result = _to_run_result(
             "thread-1",
-            {
-                "response": "新建档案失败：别名“爷爷”已经被其他成员或宠物使用。",
-                "process_events": [
-                    {"step_type": "tool.error", "text": "新建档案失败：别名“爷爷”已经被其他成员或宠物使用。"}
-                ],
-            },
+            {"response": "新建档案失败：别名“爷爷”已经被其他成员或宠物使用。"},
         )
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.messages[0].content, "新建档案失败：别名“爷爷”已经被其他成员或宠物使用。")
-        self.assertEqual(result.process_events[0]["step_type"], "tool.error")
+        self.assertFalse(hasattr(result, "process_events"))
 
-    def test_process_step_events_include_display_step_type(self) -> None:
+    def test_completed_run_without_emitted_events_has_no_process_steps(self) -> None:
         result = _to_run_result(
             "thread-1",
-            {
-                "response": "已确认对象。",
-                "process_events": [
-                    {"step_type": "runtime.note", "text": "正在处理你的确认结果。"},
-                    {"step_type": "tool.observation", "text": "已确认这次管理对象是妈妈。"},
-                    {"step_type": "tool.error", "text": "工具执行失败。"},
-                ],
-            },
+            {"response": "已确认对象。"},
         )
 
         process_steps = [event for event in result.events if event.event_type == "process.step"]
 
         self.assertEqual(
             [event.payload["step_type"] for event in process_steps],
-            ["runtime.note", "tool.observation", "tool.error"],
+            [],
         )
 
     def test_completed_run_without_llm_text_is_error_not_fallback_answer(self) -> None:
@@ -1319,7 +1529,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             {
                 "response": "",
                 "metadata": {"status": "llm_empty_response"},
-                "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是我（成员）。"}],
             },
         )
 
@@ -1334,7 +1543,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             {
                 "response": "",
                 "metadata": {"status": "final_answer_missing"},
-                "process_events": [{"step_type": "tool.observation", "text": "报告查询工具尚未接入。"}],
             },
         )
 
@@ -1343,7 +1551,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.error, "Agent 工具流程结束后缺少最终回复文本。")
         self.assertNotIn("message.assistant.completed", [event.event_type for event in result.events])
 
-    def test_interrupted_result_keeps_latest_process_event_and_current_interaction(self) -> None:
+    def test_interrupted_result_keeps_current_interaction(self) -> None:
         result = _to_run_result(
             "thread-1",
             {
@@ -1360,15 +1568,11 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         },
                     )()
                 ],
-                "process_events": [
-                    {"step_type": "tool.error", "text": "新建档案失败：别名“爷爷”已经被其他成员或宠物使用。"}
-                ],
             },
         )
 
-        self.assertEqual(len(result.process_events), 2)
-        self.assertEqual(result.process_events[0]["step_type"], "tool.error")
-        self.assertEqual(result.process_events[1]["text"], "请输入这个人物在 Memomed 里展示的名称。")
+        self.assertFalse(hasattr(result, "process_events"))
+        self.assertEqual(result.interrupt.title, "新建人物档案")
 
     async def test_start_chat_returns_thread_id_and_result_shape(self) -> None:
         request = ChatRequest(thread_id="runtime-test-thread", message="帮家人存一下这个报告")
@@ -1386,6 +1590,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch("app.agent.tools.patient.classify_patient_grounding", return_value=grounding),
             patch("app.agent.runtime.persist_run_result") as persist_mock,
         ):
+            persist_mock.side_effect = _return_persisted_result
             tool_call_response = AIMessage(
                 content="",
                 tool_calls=[
@@ -1432,7 +1637,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "inspect_tool_result": {
                     "pending_action": interaction["pending_action"],
                     "interaction": interaction,
-                    "process_events": [{"step_type": "runtime.note", "text": "需要确认本次健康档案的管理对象。"}],
                 }
             }
             yield {"__interrupt__": (type("Interrupt", (), {"value": interaction})(),)}
@@ -1441,6 +1645,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
             patch("app.agent.runtime.persist_run_result") as persist_mock,
         ):
+            persist_mock.side_effect = _return_persisted_result
             packets = [
                 packet
                 async for packet in stream_start_chat(
@@ -1449,17 +1654,45 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         event_types = [packet.event.event_type for packet in packets if packet.event]
+        event_ordinals = [packet.event.ordinal for packet in packets if packet.event]
         event_seqs = [packet.event.seq for packet in packets if packet.event]
         final_result = packets[-1].result
 
         self.assertEqual(event_types[0], "message.user")
         self.assertIn("process.group.started", event_types)
         self.assertIn("interrupt.requested", event_types)
-        self.assertEqual(event_seqs, sorted(event_seqs))
-        self.assertEqual(event_seqs[:3], [1, 2, 3])
+        self.assertEqual(event_ordinals, sorted(event_ordinals))
+        self.assertTrue(all(seq is None for seq in event_seqs))
         self.assertIsNotNone(final_result)
         self.assertEqual(final_result.status, "interrupted")
         persist_mock.assert_awaited_once()
+
+    async def test_stream_start_chat_emits_initial_process_before_graph_stream(self) -> None:
+        async def fake_astream(*args, **kwargs):
+            yield {
+                "final_answer": {
+                    "response": "我会继续处理。",
+                    "metadata": {"status": "completed"},
+                }
+            }
+
+        with (
+            patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
+        ):
+            packets = [
+                packet
+                async for packet in stream_start_chat(
+                    ChatRequest(thread_id="stream-runtime-initial-process-test", message="看看笨笨")
+                )
+            ]
+
+        events = [packet.event for packet in packets if packet.event]
+        event_types = [event.event_type for event in events]
+
+        self.assertEqual(event_types[:3], ["message.user", "process.group.started", "process.step"])
+        self.assertEqual(events[2].payload["step_type"], "agent.progress")
+        self.assertEqual(events[2].content, "正在理解需求并选择合适的工具。")
 
     async def test_stream_start_chat_yields_custom_process_event_before_node_update(self) -> None:
         async def fake_astream(*args, **kwargs):
@@ -1482,7 +1715,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
         ):
             packets = [
                 packet
@@ -1505,6 +1738,50 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("process.step", event_types)
         self.assertIn("正在查询家庭成员与宠物档案。", contents)
         self.assertLess(custom_step_index, run_result_index)
+
+    async def test_stream_preserves_repeated_custom_process_steps_with_same_text(self) -> None:
+        async def fake_astream(*args, **kwargs):
+            for _ in range(2):
+                yield (
+                    "custom",
+                    {
+                        "type": "process_step",
+                        "step_type": "tool.observation",
+                        "title": "工具结果",
+                        "text": "已确认这次管理对象是妈妈（成员）。",
+                        "work_item_type": "subject_resolution",
+                    },
+                )
+            yield {
+                "final_answer": {
+                    "response": "已完成。",
+                    "metadata": {"status": "completed"},
+                }
+            }
+
+        with (
+            patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
+        ):
+            packets = [
+                packet
+                async for packet in stream_start_chat(
+                    ChatRequest(thread_id="stream-runtime-repeated-custom-step-test", message="看看妈妈")
+                )
+            ]
+
+        repeated_steps = [
+            packet.event
+            for packet in packets
+            if packet.event
+            and packet.event.event_type == "process.step"
+            and packet.event.content == "已确认这次管理对象是妈妈（成员）。"
+        ]
+
+        self.assertEqual(len(repeated_steps), 2)
+        self.assertEqual([event.ordinal for event in repeated_steps], sorted(event.ordinal for event in repeated_steps))
+        self.assertNotEqual(repeated_steps[0].id, repeated_steps[1].id)
+        self.assertTrue(all(event.dedupe_key is None for event in repeated_steps))
 
     async def test_langgraph_tool_node_emits_custom_process_events_while_running_tool(self) -> None:
         grounding = PatientGrounding(
@@ -1546,6 +1823,9 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def bind_tools(self, tools):
                 return self.bound
 
+            async def ainvoke(self, messages):
+                return AIMessage(content="暂时还没有接入报告查询。")
+
         custom_payloads = []
         with (
             patch("app.agent.graph.get_openai_llm_stream", return_value=FakeLLM()),
@@ -1564,6 +1844,114 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("正在调用工具：确认健康档案对象。", custom_texts)
         self.assertTrue(any("老公" in str(text) for text in custom_texts))
 
+    async def test_langgraph_non_stream_run_does_not_write_tool_process_events_to_state(self) -> None:
+        grounding = PatientGrounding(
+            intent="human_health",
+            resolution_status="resolved",
+            matched_subject_id="subject-mother",
+            patient_code="subject-mother",
+            display_name="妈妈",
+            patient_type="human",
+            confidence="high",
+            reason="明确提到妈妈",
+            next_action="continue",
+        )
+        candidate = SubjectCandidate(
+            subject_id="subject-mother",
+            patient_code="subject-mother",
+            display_name="妈妈",
+            patient_type="human",
+            aliases=["妈妈"],
+        )
+
+        class FakeBoundLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "resolve_patient_tool",
+                                "args": {"user_text": "帮妈妈看报告"},
+                                "id": "call_resolve",
+                            }
+                        ],
+                    )
+                return AIMessage(content="已确认对象是妈妈。")
+
+        class FakeLLM:
+            def __init__(self):
+                self.bound = FakeBoundLLM()
+
+            def bind_tools(self, tools):
+                return self.bound
+
+        with (
+            patch("app.agent.graph.get_openai_llm_stream", return_value=FakeLLM()),
+            patch("app.agent.tools.patient.list_subject_candidates", return_value=[candidate]),
+            patch("app.agent.tools.patient.classify_patient_grounding", return_value=grounding),
+        ):
+            result = await graph.ainvoke(
+                {"messages": [{"role": "user", "content": "帮妈妈看报告"}], "metadata": {}},
+                {"configurable": {"thread_id": "graph-non-stream-process-events-test"}},
+            )
+
+        self.assertNotIn("process_events", result)
+        self.assertEqual(result["response"], "已确认对象是妈妈。")
+
+    async def test_langgraph_tool_node_uses_tool_capability_as_work_item_type(self) -> None:
+        class FakeBoundLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "query_health_records_tool",
+                                "args": {"subject_id": "subject-mother", "record_type": "blood_routine"},
+                                "id": "call_query_records",
+                            }
+                        ],
+                    )
+                return AIMessage(content="暂时还没有接入报告查询。")
+
+        class FakeLLM:
+            def __init__(self):
+                self.bound = FakeBoundLLM()
+
+            def bind_tools(self, tools):
+                return self.bound
+
+            async def ainvoke(self, messages):
+                return AIMessage(content="暂时还没有接入报告查询。")
+
+        custom_payloads = []
+        with patch("app.agent.graph.get_openai_llm_stream", return_value=FakeLLM()):
+            async for mode, data in graph.astream(
+                {"messages": [{"role": "user", "content": "查一下妈妈血常规"}], "metadata": {}},
+                {"configurable": {"thread_id": "graph-tool-capability-work-item-test"}},
+                stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom":
+                    custom_payloads.append(data)
+
+        query_payloads = [
+            payload
+            for payload in custom_payloads
+            if payload.get("payload", {}).get("tool_name") == "query_health_records_tool"
+        ]
+
+        self.assertTrue(query_payloads)
+        self.assertTrue(all(payload.get("work_item_type") == "health_records_query" for payload in query_payloads))
+
     async def test_stream_start_chat_persists_completed_final_result(self) -> None:
         async def fake_astream(*args, **kwargs):
             yield {
@@ -1577,6 +1965,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
             patch("app.agent.runtime.persist_run_result") as persist_mock,
         ):
+            persist_mock.side_effect = _return_persisted_result
             packets = [
                 packet
                 async for packet in stream_start_chat(
@@ -1596,7 +1985,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         async def fake_astream(*args, **kwargs):
             yield {
                 "continue_pending_action": {
-                    "process_events": [{"step_type": "tool.observation", "text": "已新建人物档案：奶奶。"}],
                     "response": "已新建人物档案：奶奶。",
                     "handoff_context": "已新建人物档案：奶奶。",
                     "metadata": {"status": "success"},
@@ -1611,7 +1999,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
         ):
             packets = [
                 packet
@@ -1626,13 +2014,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             if packet.event and packet.event.event_type == "message.assistant.completed"
         ]
 
-        self.assertEqual(
-            streamed_assistant_messages,
-            ["已为奶奶建档。现在可以上传报告，我会继续帮你整理。"],
-        )
+        self.assertEqual(streamed_assistant_messages, [])
         self.assertEqual(packets[-1].result.messages[0].content, "已为奶奶建档。现在可以上传报告，我会继续帮你整理。")
 
-    async def test_stream_emits_incremental_assistant_delta_before_completed_message(self) -> None:
+    async def test_stream_emits_incremental_assistant_delta_before_final_result_message(self) -> None:
         async def fake_astream(*args, **kwargs):
             yield ("messages", (AIMessageChunk(content="你好"), {"langgraph_node": "call_model"}))
             yield ("messages", (AIMessageChunk(content="呀"), {"langgraph_node": "call_model"}))
@@ -1657,7 +2042,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
         ):
             packets = [
                 packet
@@ -1681,8 +2066,67 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({event.id for event in delta_events}), 2)
         self.assertEqual([event.payload["delta_index"] for event in delta_events], [1, 2])
         self.assertEqual(len({event.payload["message_id"] for event in delta_events}), 1)
-        self.assertEqual(completed_events[0].content, "你好呀")
+        self.assertEqual(completed_events, [])
         self.assertEqual(packets[-1].result.messages[0].content, "你好呀")
+
+    async def test_stream_forwards_assistant_delta_before_later_process_events(self) -> None:
+        async def fake_astream(*args, **kwargs):
+            yield ("messages", (AIMessageChunk(content="先"), {"langgraph_node": "call_model"}))
+            yield (
+                "custom",
+                {
+                    "type": "process_step",
+                    "step_type": "tool.started",
+                    "title": "工具调用",
+                    "text": "正在调用工具：确认健康档案对象。",
+                    "work_item_type": "subject_resolution",
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "call_model": {
+                        "messages": [AIMessage(content="先回答")],
+                        "response": "先回答",
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "final_answer": {
+                        "response": "先回答",
+                        "metadata": {"status": "completed"},
+                    }
+                },
+            )
+
+        with (
+            patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
+        ):
+            packets = [
+                packet
+                async for packet in stream_start_chat(
+                    ChatRequest(thread_id="stream-runtime-immediate-delta-test", message="你好")
+                )
+            ]
+
+        events = [packet.event for packet in packets if packet.event]
+        event_types = [event.event_type for event in events]
+        tool_process_index = next(
+            index
+            for index, event in enumerate(events)
+            if event.event_type == "process.step" and event.content == "正在调用工具：确认健康档案对象。"
+        )
+        tool_process_event = events[tool_process_index]
+
+        self.assertLess(
+            event_types.index("message.assistant.delta"),
+            tool_process_index,
+        )
+        self.assertEqual(tool_process_event.ordinal, 6)
+        self.assertTrue(tool_process_event.id.endswith("_0006"))
 
     async def test_stream_smooths_large_provider_chunks_into_smaller_visible_deltas(self) -> None:
         async def fake_astream(*args, **kwargs):
@@ -1708,7 +2152,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
             patch("app.agent.runtime.DISPLAY_DELTA_DELAY_SECONDS", 0),
         ):
             packets = [
@@ -1753,7 +2197,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
             patch("app.agent.runtime.DISPLAY_DELTA_DELAY_SECONDS", 0),
         ):
             packets = [
@@ -1764,7 +2208,12 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         event_types = [packet.event.event_type for packet in packets if packet.event]
-        self.assertNotIn("message.assistant.delta", event_types)
+        self.assertIn("message.assistant.delta", event_types)
+        self.assertIn("message.assistant.cancelled", event_types)
+        self.assertLess(
+            event_types.index("message.assistant.delta"),
+            event_types.index("message.assistant.cancelled"),
+        )
         self.assertNotIn("message.assistant.completed", event_types)
 
     async def test_stream_hides_tool_preface_even_after_process_events_exist(self) -> None:
@@ -1773,7 +2222,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "updates",
                 {
                     "continue_pending_action": {
-                        "process_events": [{"step_type": "tool.observation", "text": "已确认这次管理对象是妈妈（成员）。"}],
                         "response": "已确认这次管理对象是妈妈（成员）。",
                         "handoff_context": "已确认这次管理对象是妈妈（成员）。",
                         "current_subject": {"subject_id": "subject-mother", "display_name": "妈妈"},
@@ -1815,7 +2263,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
             patch("app.agent.runtime.DISPLAY_DELTA_DELAY_SECONDS", 0),
         ):
             packets = [
@@ -1825,13 +2273,18 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-        delta_contents = [
-            packet.event.content
+        event_types = [
+            packet.event.event_type
             for packet in packets
-            if packet.event and packet.event.event_type == "message.assistant.delta"
+            if packet.event
         ]
 
-        self.assertEqual(delta_contents, [])
+        self.assertIn("message.assistant.delta", event_types)
+        self.assertIn("message.assistant.cancelled", event_types)
+        self.assertLess(
+            event_types.index("message.assistant.delta"),
+            event_types.index("message.assistant.cancelled"),
+        )
 
     async def test_stream_ignores_whitespace_only_assistant_chunks(self) -> None:
         async def fake_astream(*args, **kwargs):
@@ -1849,7 +2302,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
             patch("app.agent.runtime.DISPLAY_DELTA_DELAY_SECONDS", 0),
         ):
             packets = [
@@ -1888,7 +2341,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.agent.runtime.graph.astream", side_effect=fake_astream),
-            patch("app.agent.runtime.persist_run_result"),
+            patch("app.agent.runtime.persist_run_result", side_effect=_return_persisted_result),
         ):
             packets = [
                 packet
@@ -1901,7 +2354,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("message.assistant.delta", event_types)
 
 
-class AgentStreamingRouteTests(unittest.TestCase):
+class AgentStreamingRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_sse_event_formats_named_json_payload(self) -> None:
         payload = {"id": "evt_1", "event_type": "message.user", "content": "帮我存报告"}
 
@@ -1916,6 +2369,44 @@ class AgentStreamingRouteTests(unittest.TestCase):
 
         self.assertEqual(headers["Cache-Control"], "no-cache")
         self.assertEqual(headers["X-Accel-Buffering"], "no")
+
+    async def test_stream_route_does_not_apply_seq_offset_to_live_events(self) -> None:
+        live_event = AgentEvent(
+            id="evt_run_1_0001",
+            conversation_id="thread-1",
+            run_id="run-1",
+            ordinal=1,
+            seq=None,
+            event_type="message.user",
+            role="user",
+            content="你好",
+        )
+        persisted_result = AgentRunResult(
+            thread_id="thread-1",
+            status="completed",
+            events=[
+                live_event.model_copy(update={"seq": 9}),
+            ],
+        )
+
+        async def fake_stream_start_chat(*args, **kwargs):
+            from app.agent.runtime import AgentStreamPacket
+
+            yield AgentStreamPacket(event=live_event)
+            yield AgentStreamPacket(result=persisted_result)
+
+        with patch("app.agent.api.routes.stream_start_chat", side_effect=fake_stream_start_chat):
+            response = await chat_stream("thread-1", ChatRequest(thread_id="ignored", message="你好"))
+            chunks = [chunk async for chunk in response.body_iterator]
+
+        payload = "".join(chunks)
+        self.assertIn('"ordinal":1', payload)
+        self.assertIn('"seq":null', payload)
+        self.assertIn('"seq":9', payload)
+
+
+async def _return_persisted_result(result: AgentRunResult, **kwargs) -> AgentRunResult:
+    return result
 
 
 if __name__ == "__main__":

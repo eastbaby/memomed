@@ -65,8 +65,8 @@ pnpm run build
 | 用例 | 输入/场景 | 期望结果 | 当前覆盖位置 |
 | --- | --- | --- | --- |
 | conversation 级 seq 持久化 | 旧会话已有 5 条事件，新 run 内 seq 为 1/2 | 写库后 seq 为 6/7 | `backend/test/test_agent_event_store.py` |
-| SSE 使用 conversation 级 seq | 旧会话已有事件，新 run 流式返回 | 前端收到的实时事件 seq 与历史回放一致 | `backend/test/test_agent_event_store.py` |
-| event upsert | 同一个 event_id 再次返回 | 前端更新原事件，不重复 append | 前端逻辑，后续建议补 Vitest |
+| SSE 实时 ordinal + 最终 seq 回填 | 旧会话已有事件，新 run 流式返回 | 实时 `agent_event.seq=null` 且按 `ordinal` 展示；`run_result.events` 用同 ID 回填数据库分配的 `seq` | `backend/test/test_agent_v1.py` + `backend/test/test_agent_scenarios.py` |
+| event upsert | 同一个 event_id 在实时和最终结果中再次返回 | 前端更新原事件，不重复 append | `frontend/test/agentEventTimeline.test.ts` |
 | pending interrupt 完成 | resume 后 | 旧 `interrupt.requested` 从 pending 变 completed | `backend/test/test_agent_event_store.py` |
 | `interrupt.resumed` 记录 | 用户完成选择/输入 | 过程卡片中有用户已确认事件 | `backend/test/test_agent_v1.py` |
 | 实时与历史事件归一化一致 | SSE 实时展示后刷新页面 | 过程卡片数量、可见步骤、顺序与刷新前一致 | `frontend/test/agentEventTimeline.test.ts` + 手工验收 |
@@ -156,13 +156,12 @@ pnpm run build
 
 ## 新增前端交互时必须补的测试
 
-当前前端还没有 Vitest/Playwright，暂时用 lint/build + Chrome 手工验收。建议下一阶段补：
+当前前端已有 node test 覆盖 timeline/order/optimistic/elapsed/work item 逻辑；浏览器级 e2e 仍主要靠 Chrome 手工验收。建议下一阶段补：
 
-- `mergeAgentEvents` 单元测试。
 - `extractPendingInterrupt` 单元测试。
 - `ChatTimeline` 分组渲染测试。
 - Markdown assistant 气泡渲染测试：列表、表格、链接、代码块。
-- 历史事件加载必须复用实时事件 reducer，不允许绕过过滤/去重逻辑。
+- 历史事件加载必须复用实时事件 reducer，不允许绕过排序、delta 合并和 work item 聚合逻辑。
 - Playwright e2e：发送消息、完成 interrupt、刷新历史、继续对话。
 
 ## 不允许的做法
@@ -170,5 +169,5 @@ pnpm run build
 - 不允许用兜底助手回复掩盖 LLM 空输出。
 - 不允许在通用系统 prompt 中写某个单一 tool 的业务特例。
 - 不允许让前端靠文本内容判断流程状态，必须依赖事件协议字段。
-- 不允许实时流和历史回放使用不同排序语义。
+- 不允许实时流和历史回放使用不同事件语义；实时可按 `ordinal` 临时排序，落库后必须用同 ID 回填 `seq`。
 - 不允许跳过失败测试继续提交。

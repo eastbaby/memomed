@@ -14,6 +14,8 @@ def tool_result_needs_interrupt(tool_result: dict[str, Any] | None) -> bool:
 def route_after_tool_result(state: dict[str, Any]) -> str:
     if state.get("interaction"):
         return "human_interrupt"
+    if state.get("response"):
+        return "final_answer"
     return "call_model"
 
 

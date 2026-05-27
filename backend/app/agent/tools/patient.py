@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, Literal
 
 from langchain_core.tools import tool
@@ -13,6 +14,8 @@ from app.models.models import MmCareSubject, MmCareSubjectAlias
 from app.subjects.schemas import SubjectCreateRequest
 from app.subjects.service import DuplicateAliasError, create_subject
 
+
+logger = logging.getLogger(__name__)
 
 CREATE_SUBJECT_OPTIONS = [
     SelectOption(label="新建人物", value="create_patient"),
@@ -127,8 +130,8 @@ async def classify_patient_grounding(
             return result
         if isinstance(result, dict):
             return PatientGrounding.model_validate(result)
-    except (ValidationError, json.JSONDecodeError, ValueError):
-        pass
+    except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+        logger.warning("patient grounding classifier failed", exc_info=exc)
 
     # LLM 输出异常时保守进入人工选择，不做粗暴关键词归属。
     return PatientGrounding(
@@ -295,7 +298,8 @@ async def commit_patient_selection(
         return await _commit_create_subject(pending_action, user_decision)
 
     value = user_decision.get("value")
-    label = user_decision.get("label") or _label_from_decision_value(value)
+    candidate_payload = pending_action.get("candidate_payload") or {}
+    allowed_subject_ids = set(candidate_payload.get("candidate_subject_ids") or [])
 
     if value in {"create_patient", "create_pet"}:
         subject_type = "pet" if value == "create_pet" else "human"
@@ -322,17 +326,37 @@ async def commit_patient_selection(
             )
         )
 
+    subject_id = _subject_id_from_decision_value(value)
+    if not subject_id or subject_id not in allowed_subject_ids:
+        return _dump_result(
+            ToolResult(
+                status="error",
+                message="无效的健康档案选择：请选择当前确认卡片中的候选对象，或选择新建人物/宠物。",
+                data={},
+            )
+        )
+
+    label = user_decision.get("label")
+    if not label:
+        return _dump_result(
+            ToolResult(
+                status="error",
+                message="无效的健康档案选择：缺少候选对象展示名称。",
+                data={},
+            )
+        )
+
     return _dump_result(
         ToolResult(
             status="success",
             message=f"已确认这次管理对象是{label}。",
             data={
                 "patient": {
-                    "subject_id": _subject_id_from_decision_value(value),
-                    "patient_code": value,
+                    "subject_id": subject_id,
+                    "patient_code": subject_id,
                     "display_name": label,
                 },
-                "source": pending_action.get("candidate_payload", {}),
+                "source": candidate_payload,
             },
         )
     )
@@ -397,11 +421,3 @@ def _subject_id_from_decision_value(value: Any) -> str | None:
     if isinstance(value, str) and value.startswith("subject:"):
         return value.removeprefix("subject:")
     return None
-
-
-def _label_from_decision_value(value: Any) -> str:
-    labels = {
-        "create_patient": "新建人物",
-        "create_pet": "新建宠物",
-    }
-    return labels.get(str(value), "未知对象")

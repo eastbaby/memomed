@@ -1,0 +1,45 @@
+<h2>Memomed Enterprise Architecture Options</h2>
+<p class="subtitle">Choose the architecture story we want to carry into the design spec and interviews.</p>
+
+<div class="options">
+  <div class="option" data-choice="recommended-hybrid" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Recommended: Enterprise Harness + LangGraph Domain Workflows</h3>
+      <p>Use a lightweight agent harness for routing, context assembly, policy, tools, memory, traces, and evals. Use LangGraph for medical-report RAG and medication/follow-up workflows where state control and HITL matter.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Best balance of interview depth and feasible implementation.</li><li>Lets you discuss platform concepts without overbuilding a platform.</li><li>Medical safety is explicit and auditable.</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Requires disciplined boundaries so the harness does not become a vague god layer.</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="deep-agents-first" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Deep Agents / Hermes-like Personal Agent First</h3>
+      <p>Build an always-on personal assistant with persistent memory, skills, scheduled automations, subagents, and multi-channel reach, inspired by Hermes Agent and OpenClaw-style assistants.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Strong platform-framework story.</li><li>Shows awareness of modern autonomous agent systems.</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Too open-ended for healthcare unless heavily constrained.</li><li>Risk of looking like copied platform buzzwords rather than a solved domain problem.</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="workflow-only" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Workflow-only LangGraph Application</h3>
+      <p>Keep everything inside one or several LangGraph graphs. Focus on report ingestion, RAG, medication reminders, and chat responses without a separate harness abstraction.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Easiest to implement quickly.</li><li>Very concrete and demo-friendly.</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Weaker answer to enterprise platform and infra questions.</li><li>Routing, policies, evals, and memory may feel bolted on later.</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>My recommendation</h3>
+  <p>Pick A. It lets Memomed be a serious healthcare assistant, not a general autonomous agent, while still giving you a strong platform-level interview narrative.</p>
+</div>

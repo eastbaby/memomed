@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../types/agent'
+import { compareAgentEvents, eventSortValue } from './agentEventOrder.ts'
 
 export function mergeAgentEvents(current: AgentEvent[], incoming: AgentEvent[]) {
   if (incoming.length === 0) return current
@@ -6,8 +7,9 @@ export function mergeAgentEvents(current: AgentEvent[], incoming: AgentEvent[]) 
   const indexById = new Map(current.map((event, index) => [event.id, index]))
   const merged = [...current]
 
-  for (const event of incoming) {
-    if (!shouldKeepEvent(event, merged)) {
+  for (const rawEvent of incoming) {
+    let event = rawEvent
+    if (!isRenderableEvent(event)) {
       continue
     }
     if (event.event_type === 'message.assistant.delta') {
@@ -16,16 +18,19 @@ export function mergeAgentEvents(current: AgentEvent[], incoming: AgentEvent[]) 
       continue
     }
     if (event.event_type === 'message.user') {
-      removeMatchingOptimisticUserEvent(merged, event)
-      removeOptimisticProcessEvents(merged, event.conversation_id)
       rebuildIndex(indexById, merged)
     }
-    if (event.event_type === 'process.group.started' || event.event_type === 'message.assistant.completed' || event.event_type === 'interrupt.requested') {
-      removeOptimisticProcessEvents(merged, event.conversation_id)
+    if (event.event_type === 'run.elapsed') {
+      event = elapsedEventWithMonotonicSeconds(merged, event)
+      removePreviousElapsedEvents(merged, event)
       rebuildIndex(indexById, merged)
     }
     if (event.event_type === 'message.assistant.completed') {
       removeStreamingAssistantDeltaEvents(merged, event)
+      rebuildIndex(indexById, merged)
+    }
+    if (event.event_type === 'message.assistant.cancelled') {
+      removeCancelledAssistantDeltaEvents(merged, event)
       rebuildIndex(indexById, merged)
     }
     const index = indexById.get(event.id)
@@ -37,50 +42,97 @@ export function mergeAgentEvents(current: AgentEvent[], incoming: AgentEvent[]) 
     merged.push(event)
   }
 
-  return merged.sort((left, right) => left.seq - right.seq || eventTypeOrder(left.event_type) - eventTypeOrder(right.event_type))
+  return merged.sort(compareAgentEvents)
 }
 
-function shouldKeepEvent(event: AgentEvent, currentEvents: AgentEvent[]) {
+function isRenderableEvent(event: AgentEvent) {
   if (event.event_type !== 'process.step') return true
-  if (!isVisibleProcessStep(event)) return false
-  return !currentEvents.some((current) => current.event_type === 'process.step' && processStepKey(current) === processStepKey(event))
+  return isVisibleProcessStep(event)
+}
+
+function removePreviousElapsedEvents(events: AgentEvent[], incoming: AgentEvent) {
+  const incomingTurnStartSeq = userTurnStartSeq(events, incoming)
+  removeEventsInPlace(
+    events,
+    (event) =>
+      event.id !== incoming.id &&
+      event.event_type === 'run.elapsed' &&
+      event.conversation_id === incoming.conversation_id &&
+      userTurnStartSeq(events, event) === incomingTurnStartSeq,
+  )
+}
+
+function elapsedEventWithMonotonicSeconds(events: AgentEvent[], incoming: AgentEvent) {
+  const incomingTurnStartSeq = userTurnStartSeq(events, incoming)
+  const previous = events
+    .filter(
+      (event) =>
+        event.event_type === 'run.elapsed' &&
+        event.conversation_id === incoming.conversation_id &&
+        userTurnStartSeq(events, event) === incomingTurnStartSeq,
+    )
+    .sort((left, right) => elapsedSecondsOf(right) - elapsedSecondsOf(left))[0]
+  if (!previous || elapsedSecondsOf(incoming) >= elapsedSecondsOf(previous)) {
+    return incoming
+  }
+  return {
+    ...incoming,
+    content: previous.content,
+    payload: { ...incoming.payload, elapsed_seconds: elapsedSecondsOf(previous) },
+  }
+}
+
+function userTurnStartSeq(events: AgentEvent[], target: AgentEvent) {
+  let startSeq = Number.NEGATIVE_INFINITY
+  for (const event of events) {
+    if (
+      event.conversation_id === target.conversation_id &&
+      event.event_type === 'message.user' &&
+      eventSortValue(event) < eventSortValue(target) &&
+      eventSortValue(event) > startSeq
+    ) {
+      startSeq = eventSortValue(event)
+    }
+  }
+  return startSeq
+}
+
+function elapsedSecondsOf(event: AgentEvent) {
+  const value = event.payload.elapsed_seconds
+  return typeof value === 'number' ? Math.max(0, Math.floor(value)) : 0
 }
 
 function isVisibleProcessStep(event: AgentEvent) {
   const stepType = readStringPayload(event, 'step_type')
-  return stepType === 'tool.started' || stepType === 'tool.observation' || stepType === 'tool.error'
-}
-
-function processStepKey(event: AgentEvent) {
-  const stepType = readStringPayload(event, 'step_type')
-  return [event.work_item_id ?? event.parent_event_id ?? event.run_id, stepType, event.content ?? ''].join('|')
+  return stepType === 'agent.progress' || stepType === 'tool.started' || stepType === 'tool.observation' || stepType === 'tool.error'
 }
 
 function mergeAssistantDeltaEvent(events: AgentEvent[], incoming: AgentEvent) {
-  const messageId = readStringPayload(incoming, 'message_id') ?? incoming.run_id ?? incoming.id
+  const messageId = requiredStringPayload(incoming, 'message_id')
+  const incomingChunk = deltaChunk(incoming)
   const existingIndex = events.findIndex(
     (event) =>
       event.event_type === 'message.assistant.delta' &&
-      (readStringPayload(event, 'message_id') ?? event.run_id ?? event.id) === messageId,
+      requiredStringPayload(event, 'message_id') === messageId,
   )
   if (existingIndex < 0) {
     events.push({
       ...incoming,
       id: streamingDeltaEventId(incoming, messageId),
       content: incoming.content ?? '',
-      payload: { ...incoming.payload, message_id: messageId, delta_chunks: [deltaChunk(incoming)] },
+      payload: { ...incoming.payload, message_id: messageId, delta_chunks: [incomingChunk] },
     })
     return
   }
 
   const existing = events[existingIndex]
-  const chunks = [...readDeltaChunks(existing), deltaChunk(incoming)]
+  const chunks = [...readDeltaChunks(existing), incomingChunk]
   const uniqueChunks = dedupeDeltaChunks(chunks)
   events[existingIndex] = {
     ...existing,
     ...incoming,
     id: existing.id,
-    seq: Math.min(existing.seq, incoming.seq),
+    seq: mergedSeq(existing.seq, incoming.seq),
     content: uniqueChunks.map((chunk) => chunk.content).join(''),
     payload: {
       ...existing.payload,
@@ -97,7 +149,7 @@ function streamingDeltaEventId(event: AgentEvent, messageId: string) {
 
 function deltaChunk(event: AgentEvent) {
   return {
-    index: readNumberPayload(event, 'delta_index') ?? event.seq,
+    index: requiredNumberPayload(event, 'delta_index'),
     content: event.content ?? '',
   }
 }
@@ -134,26 +186,30 @@ function readNumberPayload(event: AgentEvent, key: string) {
   return typeof value === 'number' ? value : null
 }
 
+function requiredStringPayload(event: AgentEvent, key: string) {
+  const value = readStringPayload(event, key)
+  if (value === null || value.length === 0) {
+    throw new Error(`${event.event_type} 缺少 payload.${key}`)
+  }
+  return value
+}
+
+function requiredNumberPayload(event: AgentEvent, key: string) {
+  const value = readNumberPayload(event, key)
+  if (value === null) {
+    throw new Error(`${event.event_type} 缺少 payload.${key}`)
+  }
+  return value
+}
+
 function rebuildIndex(indexById: Map<string, number>, events: AgentEvent[]) {
   indexById.clear()
   events.forEach((currentEvent, index) => indexById.set(currentEvent.id, index))
 }
 
-function removeMatchingOptimisticUserEvent(events: AgentEvent[], incoming: AgentEvent) {
-  const index = events.findIndex(
-    (event) =>
-      event.id.startsWith('local_user_') &&
-      event.event_type === 'message.user' &&
-      event.conversation_id === incoming.conversation_id &&
-      event.content === incoming.content,
-  )
-  if (index >= 0) events.splice(index, 1)
-}
-
-function removeOptimisticProcessEvents(events: AgentEvent[], conversationId: string) {
+function removeEventsInPlace(events: AgentEvent[], predicate: (event: AgentEvent) => boolean) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (event.conversation_id === conversationId && event.id.startsWith('local_process_')) {
+    if (predicate(events[index])) {
       events.splice(index, 1)
     }
   }
@@ -172,12 +228,21 @@ function removeStreamingAssistantDeltaEvents(events: AgentEvent[], completedEven
   }
 }
 
-function eventTypeOrder(eventType: string) {
-  if (eventType === 'message.user') return 0
-  if (eventType === 'process.group.started') return 1
-  if (eventType === 'process.step') return 2
-  if (eventType === 'interrupt.requested') return 3
-  if (eventType === 'message.assistant.delta') return 4
-  if (eventType === 'message.assistant.completed') return 5
-  return 10
+function removeCancelledAssistantDeltaEvents(events: AgentEvent[], cancelledEvent: AgentEvent) {
+  const messageId = readStringPayload(cancelledEvent, 'message_id')
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (
+      event.conversation_id === cancelledEvent.conversation_id &&
+      event.event_type === 'message.assistant.delta' &&
+      (messageId === null || readStringPayload(event, 'message_id') === messageId)
+    ) {
+      events.splice(index, 1)
+    }
+  }
+}
+
+function mergedSeq(left: number | null, right: number | null) {
+  if (typeof left === 'number' && typeof right === 'number') return Math.min(left, right)
+  return left ?? right
 }

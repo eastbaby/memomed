@@ -1,0 +1,57 @@
+<h2>Memomed Enterprise Agent Scope Map</h2>
+<p class="subtitle">A visual map of how the current LangGraph demo can grow into an enterprise-grade family medical assistant.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Current System: working agent primitives</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      <div class="placeholder">Chat UI</div>
+      <div class="placeholder">LangGraph Flow</div>
+      <div class="placeholder">Report OCR + RAG</div>
+      <div class="placeholder">Basic Memory</div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">Enterprise Target: harness + domain workflows + operations plane</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1.1fr 1.6fr 1.1fr;gap:16px;align-items:stretch">
+      <div class="placeholder" style="min-height:140px">
+        <strong>Product Surface</strong><br>
+        Family workspace<br>
+        Patient profiles<br>
+        Care tasks<br>
+        Notifications
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="placeholder">
+          <strong>Agent Harness</strong><br>
+          intent routing, context assembly, policy guardrails, model routing, trace IDs
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          <div class="placeholder">Report RAG Workflow</div>
+          <div class="placeholder">Medication Workflow</div>
+          <div class="placeholder">Care Plan Workflow</div>
+        </div>
+        <div class="placeholder">
+          <strong>Knowledge & Memory Layer</strong><br>
+          structured records, vector index, episodic memory, preference memory, audit log
+        </div>
+      </div>
+      <div class="placeholder" style="min-height:140px">
+        <strong>Ops & Safety Plane</strong><br>
+        evals<br>
+        observability<br>
+        privacy<br>
+        HITL<br>
+        cost/latency
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>First decision: what should this design optimize for?</h3>
+  <p>We can design the full enterprise north star, but the implementation spec should focus on one credible wedge so it is deep enough for interviews.</p>
+</div>

@@ -1,0 +1,46 @@
+<h2>设计第 1 段：企业级 Agent Harness 架构</h2>
+<p class="subtitle">顶层架构叙事：Memomed 是一个受约束的家庭健康管理 Agent 应用，不是开放式自治助手。</p>
+
+<div class="mockup">
+  <div class="mockup-header">运行时分层</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr;gap:12px">
+      <div class="placeholder">
+        <strong>1. 产品与 API 层</strong><br>
+        聊天接口、报告上传接口、家庭空间、成员档案、通知偏好
+      </div>
+      <div class="placeholder">
+        <strong>2. Agent Harness 层</strong><br>
+        请求标准化、意图路由、上下文组装、策略护栏、工具注册、模型路由、追踪与评测钩子
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="placeholder">
+          <strong>3A. 医疗报告 RAG 工作流</strong><br>
+          OCR → 元数据确认 → 索引入库 → 检索 → 有依据回答
+        </div>
+        <div class="placeholder">
+          <strong>3B. 用药与复查工作流</strong><br>
+          信息抽取 → 人工确认 → 计划生成 → 提醒 → 漏服/复查追踪
+        </div>
+        <div class="placeholder">
+          <strong>3C. 普通健康问答工作流</strong><br>
+          安全回答 → 工具调用 → 就医升级建议
+        </div>
+      </div>
+      <div class="placeholder">
+        <strong>4. 知识、记忆与运维层</strong><br>
+        Postgres、pgvector、对象存储、Redis/队列、定时任务、长期记忆、审计日志、LangSmith/可观测性、评测集
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>核心设计原则</h3>
+  <p>Harness 负责企业级横切能力；LangGraph 负责高风险、需要确定性状态、可恢复、可人工审批的领域工作流。这样既能讲应用落地，也能讲平台化思维。</p>
+</div>
+
+<div class="section">
+  <h3>面试表达</h3>
+  <p>“我不会把 Memomed 做成一个单体聊天图，而是在领域工作流前面加一层轻量企业级 Harness。Harness 统一管理路由、策略、上下文、工具、记忆、评测和可观测性；LangGraph 负责医疗报告、用药提醒这类需要状态机和人工确认的核心流程。”</p>
+</div>

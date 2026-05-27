@@ -10,6 +10,8 @@ import { Composer } from '@/components/agent/Composer'
 import { InterruptCard } from '@/components/agent/InterruptCard'
 import { SubjectRegistryPage } from '@/components/subjects/SubjectRegistryPage'
 import { mergeAgentEvents } from '@/lib/agentEventTimeline'
+import { elapsedSecondsFromLatestRunEvent, elapsedSecondsSince, shouldKeepElapsedTimerRunning, startedAtFromElapsedSeconds } from '@/lib/elapsedTime'
+import { createOptimisticTimelineUi, type OptimisticTimelineUi } from '@/lib/optimisticTimelineUi'
 import type { AgentConversation, AgentEvent, AgentRunResult, InteractionRequest } from '@/types/agent'
 
 type AppPage = 'chat' | 'subjects'
@@ -19,29 +21,49 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<AgentConversation[]>([])
   const [events, setEvents] = useState<AgentEvent[]>([])
+  const [optimisticUi, setOptimisticUi] = useState<OptimisticTimelineUi | null>(null)
   const [interrupt, setInterrupt] = useState<InteractionRequest | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [conversationListError, setConversationListError] = useState<string | null>(null)
 
   useEffect(() => {
     void refreshConversations()
   }, [])
 
+  useEffect(() => {
+    if (runStartedAt === null) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(elapsedSecondsSince(runStartedAt))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [runStartedAt])
+
   async function refreshConversations() {
     try {
       setConversations(await listAgentConversations())
-    } catch {
-      // 历史列表不应该阻断当前聊天主流程。
+      setConversationListError(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '历史列表加载失败'
+      console.warn('Failed to refresh agent conversations', err)
+      setConversationListError(message)
     }
   }
 
   async function handleLoadConversation(conversationId: string) {
     setIsLoading(true)
+    setRunStartedAt(null)
     setError(null)
     try {
       const history = await getAgentConversationEvents(conversationId)
       setThreadId(history.conversation_id)
       setEvents(mergeAgentEvents([], history.events))
+      setOptimisticUi(null)
       setInterrupt(extractPendingInterrupt(history.events))
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载历史会话失败')
@@ -53,53 +75,65 @@ export default function App() {
   function handleNewConversation() {
     setThreadId(null)
     setEvents([])
+    setOptimisticUi(null)
     setInterrupt(null)
+    setRunStartedAt(null)
     setError(null)
   }
 
   async function handleSend(message: string) {
+    let shouldStopTimer = true
     setIsLoading(true)
+    setElapsedSeconds(0)
+    setRunStartedAt(Date.now())
     setError(null)
     const nextThreadId = threadId ?? createThreadId()
     setThreadId(nextThreadId)
-    setEvents((current) =>
-      mergeAgentEvents(current, [
-        createOptimisticUserEvent(nextThreadId, message, current),
-        ...createOptimisticProcessEvents(nextThreadId, current),
-      ]),
-    )
+    setOptimisticUi(createOptimisticTimelineUi(nextThreadId, message))
 
     try {
       const result = await streamAgentChat({ thread_id: nextThreadId, message }, handleStreamEvent)
       applyResult(result)
+      shouldStopTimer = !shouldKeepElapsedTimerRunning(result)
       void refreshConversations()
     } catch (err) {
+      setOptimisticUi(null)
       setError(err instanceof Error ? err.message : '发送失败')
     } finally {
       setIsLoading(false)
+      if (shouldStopTimer) setRunStartedAt(null)
     }
   }
 
   async function handleDecision(decision: Record<string, unknown>) {
     if (!threadId) return
+    let shouldStopTimer = true
+    const previousElapsedSeconds = elapsedSecondsFromLatestRunEvent(events)
     setIsLoading(true)
+    if (runStartedAt === null) {
+      setElapsedSeconds(previousElapsedSeconds)
+      setRunStartedAt(startedAtFromElapsedSeconds(previousElapsedSeconds))
+    }
     setError(null)
     setInterrupt(null)
 
     try {
       const result = await streamAgentResume({ thread_id: threadId, decision }, handleStreamEvent)
       applyResult(result)
+      shouldStopTimer = !shouldKeepElapsedTimerRunning(result)
       void refreshConversations()
     } catch (err) {
       setError(err instanceof Error ? err.message : '提交选择失败')
     } finally {
       setIsLoading(false)
+      if (shouldStopTimer) setRunStartedAt(null)
     }
   }
 
   function applyResult(result: AgentRunResult) {
     setThreadId(result.thread_id)
     setEvents((current) => mergeAgentEvents(current, result.events))
+    setOptimisticUi(null)
     setInterrupt(result.interrupt)
     if (result.status === 'error') {
       setError(result.error ?? 'Agent 没有返回最终回复，请稍后重试。')
@@ -107,6 +141,9 @@ export default function App() {
   }
 
   function handleStreamEvent(event: AgentEvent) {
+    if (event.event_type === 'message.user') {
+      setOptimisticUi(null)
+    }
     setEvents((current) => mergeAgentEvents(current, [event]))
     if (event.event_type === 'interrupt.requested' && event.status === 'pending') {
       const interaction = event.payload?.interaction
@@ -150,6 +187,11 @@ export default function App() {
             <h2 className="text-xs font-black tracking-[0.18em] text-stone-500">最近</h2>
             <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-stone-500">{conversations.length}</span>
           </div>
+          {conversationListError ? (
+            <p className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+              历史列表暂时无法刷新
+            </p>
+          ) : null}
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pb-4">
             {conversations.length === 0 ? (
               <p className="rounded-2xl bg-white/70 px-3 py-3 text-sm text-stone-500">暂无历史会话。</p>
@@ -206,7 +248,7 @@ export default function App() {
         {activePage === 'chat' ? (
           <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col px-4 pb-40 pt-6 md:px-8">
             <div className="flex-1">
-              <ChatTimeline events={events} />
+              <ChatTimeline events={events} optimisticUi={optimisticUi} runningElapsedSeconds={runStartedAt !== null ? elapsedSeconds : null} />
               {interrupt ? (
                 <div className="mt-5">
                   <InterruptCard interaction={interrupt} disabled={isLoading} onDecision={handleDecision} />
@@ -265,63 +307,5 @@ function createThreadId() {
   if (globalThis.crypto?.randomUUID) {
     return `thread-${globalThis.crypto.randomUUID().replaceAll('-', '')}`
   }
-  return `thread-${Date.now().toString(36)}`
-}
-
-function createOptimisticUserEvent(threadId: string, message: string, current: AgentEvent[]): AgentEvent {
-  return {
-    id: `local_user_${threadId}_${Date.now().toString(36)}`,
-    conversation_id: threadId,
-    run_id: null,
-    seq: nextLocalSeq(current),
-    event_type: 'message.user',
-    role: 'user',
-    visibility: 'visible',
-    status: 'completed',
-    content: message,
-    payload: { optimistic: true },
-  }
-}
-
-function createOptimisticProcessEvents(threadId: string, current: AgentEvent[]): AgentEvent[] {
-  const groupId = `local_process_group_${threadId}_${Date.now().toString(36)}`
-  const seq = nextLocalSeq(current)
-  return [
-    {
-      id: groupId,
-      conversation_id: threadId,
-      run_id: null,
-      work_item_id: groupId,
-      work_item_type: 'general_tool_work',
-      seq: seq + 0.01,
-      event_type: 'process.group.started',
-      role: 'assistant',
-      visibility: 'collapsed',
-      status: 'streaming',
-      title: 'Agent 过程',
-      content: '正在理解需求并选择合适的工具。',
-      payload: { optimistic: true },
-    },
-    {
-      id: `local_process_step_${threadId}_${Date.now().toString(36)}`,
-      conversation_id: threadId,
-      run_id: null,
-      work_item_id: groupId,
-      work_item_type: 'general_tool_work',
-      seq: seq + 0.02,
-      event_type: 'process.step',
-      role: 'assistant',
-      visibility: 'collapsed',
-      status: 'streaming',
-      parent_event_id: groupId,
-      title: '思考过程',
-      content: '正在理解需求并选择合适的工具。',
-      payload: { optimistic: true },
-    },
-  ]
-}
-
-function nextLocalSeq(events: AgentEvent[]) {
-  if (events.length === 0) return 0
-  return Math.max(...events.map((event) => event.seq)) + 0.01
+  throw new Error('当前浏览器不支持 crypto.randomUUID，无法创建新会话')
 }

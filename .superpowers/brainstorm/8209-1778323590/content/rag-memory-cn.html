@@ -1,0 +1,55 @@
+<h2>设计第 2 段：RAG 与记忆系统重新定位</h2>
+<p class="subtitle">核心判断：RAG 不是万能记忆。Memomed 需要“结构化健康档案 + 事件时间线 + 语义检索 + 用户长期记忆”的混合知识层。</p>
+
+<div class="mockup">
+  <div class="mockup-header">不要把所有东西都塞进向量库</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      <div class="placeholder">
+        <strong>结构化健康档案</strong><br>
+        家庭成员、疾病史、用药计划、复查计划、报告元数据<br><br>
+        适合：SQL / Postgres
+      </div>
+      <div class="placeholder">
+        <strong>医疗事件时间线</strong><br>
+        上传报告、指标异常、医生建议、用药变更、复查完成<br><br>
+        适合：事件表 / 审计日志
+      </div>
+      <div class="placeholder">
+        <strong>报告语义检索</strong><br>
+        OCR 原文、报告切片、医生结论、跨报告问答<br><br>
+        适合：pgvector + 元数据过滤 + 重排
+      </div>
+      <div class="placeholder">
+        <strong>长期用户记忆</strong><br>
+        偏好、家庭关系、提醒风格、稳定照护事实<br><br>
+        适合：记忆库 + 置信度 + 来源 + 过期策略
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">借鉴 Hermes / OpenClaw / GBrain，但不要照搬</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div class="placeholder">
+        <strong>可借鉴</strong><br>
+        持久记忆、多通道入口、技能系统、定时任务、离线整理、自动沉淀经验
+      </div>
+      <div class="placeholder">
+        <strong>必须约束</strong><br>
+        医疗场景不能开放式自治执行；记忆写入要确认；工具权限要最小化；高风险输出要可追溯
+      </div>
+      <div class="placeholder">
+        <strong>Memomed 方案</strong><br>
+        记忆分层、显式来源、置信度、人工确认、过期/撤销、审计、评测闭环
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>面试表达</h3>
+  <p>“我不会把家庭医疗助手的长期上下文简单等同于 RAG。报告原文适合向量检索，但用药计划、家庭成员、复查任务和医疗事件更适合结构化存储。真正的企业级记忆层应该有类型、来源、置信度、权限、过期策略和可撤销能力。”</p>
+</div>
